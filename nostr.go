@@ -234,6 +234,11 @@ func (nrh *NostrRelayHandler) GetEventChannel() <-chan *nostr.Event {
 	return nrh.eventChan
 }
 
+// GetRelayURL returns the relay URL
+func (nrh *NostrRelayHandler) GetRelayURL() string {
+	return nrh.relayURL
+}
+
 // Helper functions for packet processing
 
 // ParseNostrEvent parses a Nostr event content to extract the packet

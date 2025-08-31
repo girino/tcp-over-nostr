@@ -94,7 +94,7 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 				// Start new session handler with its own event channel
 				done := make(chan bool)
 				activeSessions[packet.SessionID] = done
-				go handleServerNostrSessionWithEvents(keyMgr, packet.SessionID, event.PubKey, targetAddr, sessionEventChan, done, verbose)
+				go handleServerNostrSessionWithEvents(keyMgr, packet.SessionID, event.PubKey, targetAddr, relayHandler.GetRelayURL(), sessionEventChan, done, verbose)
 
 				// Clean up when session is done
 				go func(sessionID string, doneChan chan bool) {
@@ -129,7 +129,7 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 	}
 }
 
-func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPubkey, targetAddr string, eventChan <-chan *nostr.Event, done chan bool, verbose bool) {
+func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPubkey, targetAddr, relayURL string, eventChan <-chan *nostr.Event, done chan bool, verbose bool) {
 	defer func() { done <- true }()
 
 	if verbose {
@@ -149,7 +149,7 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 	}
 
 	// Create relay handler for this session's responses
-	relayHandler, err := NewNostrRelayHandler("ws://localhost:10547", keyMgr, verbose) // TODO: Make configurable
+	relayHandler, err := NewNostrRelayHandler(relayURL, keyMgr, verbose)
 	if err != nil {
 		log.Printf("Server: Session %s - Failed to create relay handler: %v", sessionID, err)
 		return
