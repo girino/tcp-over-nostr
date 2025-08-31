@@ -11,6 +11,7 @@ tcp-proxy
 # Communication files
 input*
 output*
+packets/
 
 # Test binary, built with `go test -c`
 *.test
