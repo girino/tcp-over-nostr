@@ -24,11 +24,20 @@ func main() {
 	var keysFile = flag.String("keys-file", "", "File to store Nostr key pair (default: client-keys.json or server-keys.json)")
 
 	var verbose = flag.Bool("verbose", false, "Enable verbose logging")
+	var version = flag.Bool("version", false, "Show version information")
 
 	flag.Parse()
 
+	if *version {
+		fmt.Printf("%s\n", GetFullVersionInfo())
+		fmt.Printf("%s\n", GetCopyrightInfo())
+		os.Exit(0)
+	}
+
 	if *mode == "" {
-		fmt.Fprintf(os.Stderr, "TCP over Nostr - Decentralized TCP Proxy\n\n")
+		fmt.Fprintf(os.Stderr, "%s\n", GetVersionInfo())
+		fmt.Fprintf(os.Stderr, "Decentralized TCP Proxy over Nostr Protocol\n")
+		fmt.Fprintf(os.Stderr, "%s\n\n", GetCopyrightInfo())
 		fmt.Fprintf(os.Stderr, "Usage: %s -mode <client|server> [options]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Modes:\n")
 		fmt.Fprintf(os.Stderr, "  client: Accept TCP connections and forward data via Nostr events\n")
@@ -38,13 +47,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -server-key string   Server's Nostr public key (required)\n")
 		fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"client-keys.json\")\n")
 		fmt.Fprintf(os.Stderr, "  -relay string        Nostr relay URL (default \"ws://localhost:10547\")\n")
-		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n\n")
+		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n")
+		fmt.Fprintf(os.Stderr, "  -version            Show version information\n\n")
 		fmt.Fprintf(os.Stderr, "Server mode options:\n")
 		fmt.Fprintf(os.Stderr, "  -target-host string  Target host to proxy to (default \"localhost\")\n")
 		fmt.Fprintf(os.Stderr, "  -target-port int     Target port to proxy to (default 80)\n")
 		fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"server-keys.json\")\n")
 		fmt.Fprintf(os.Stderr, "  -relay string        Nostr relay URL (default \"ws://localhost:10547\")\n")
-		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n\n")
+		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n")
+		fmt.Fprintf(os.Stderr, "  -version            Show version information\n\n")
 		fmt.Fprintf(os.Stderr, "Examples:\n")
 		fmt.Fprintf(os.Stderr, "  # Start server (shows pubkey for client)\n")
 		fmt.Fprintf(os.Stderr, "  %s -mode server -target-host httpbin.org -target-port 80 -relay ws://relay.damus.io\n\n", os.Args[0])
@@ -54,6 +65,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s -mode server -target-host 192.168.1.100 -target-port 22\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -mode client -server-key <pubkey> -client-port 2222\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  ssh -p 2222 user@localhost\n\n")
+		fmt.Fprintf(os.Stderr, "For more information:\n")
+		fmt.Fprintf(os.Stderr, "  Version: %s --version\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  License: %s\n\n", License)
 		os.Exit(1)
 	}
 

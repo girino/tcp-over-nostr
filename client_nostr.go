@@ -10,6 +10,9 @@ import (
 )
 
 func runClientNostr(clientPort int, relayURL, serverPubkey, keysFile string, verbose bool) {
+	// Show startup banner
+	fmt.Print(GetBanner())
+
 	// Validate inputs
 	if clientPort < 1 || clientPort > 65535 {
 		log.Fatal("Client port must be between 1 and 65535")

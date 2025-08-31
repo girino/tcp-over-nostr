@@ -9,6 +9,9 @@ import (
 )
 
 func runServerNostr(targetHost string, targetPort int, relayURL, keysFile string, verbose bool) {
+	// Show startup banner
+	fmt.Print(GetBanner())
+
 	// Validate inputs
 	if targetPort < 1 || targetPort > 65535 {
 		log.Fatal("Target port must be between 1 and 65535")
