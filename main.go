@@ -14,7 +14,7 @@ func main() {
 	var targetHost = flag.String("target-host", "localhost", "Target host to proxy to")
 	var targetPort = flag.Int("target-port", 80, "Target port to proxy to")
 	var verbose = flag.Bool("verbose", false, "Enable verbose logging")
-	
+
 	flag.Parse()
 
 	// Validate inputs
