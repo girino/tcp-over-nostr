@@ -150,6 +150,8 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, sessionID, client
 	defer func() { done <- true }()
 
 	processedSequences := make(map[uint64]bool)
+	nextExpectedSequence := uint64(0)
+	pendingPackets := make(map[uint64]*Packet) // Buffer for out-of-order packets
 
 	for {
 		select {
@@ -185,35 +187,65 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, sessionID, client
 				continue
 			}
 
-			// Mark as processed
-			processedSequences[packet.Sequence] = true
-
-			// Process packet based on type
-			switch packet.Type {
-			case PacketTypeData:
-				// Write data to client connection
-				if len(packet.Data) > 0 {
-					data, err := packet.GetData()
-					if err != nil {
-						log.Printf("Client: Session %s - Error decoding packet data: %v", sessionID, err)
-						continue
-					}
-
-					if _, writeErr := conn.Write(data); writeErr != nil {
-						log.Printf("Client: Session %s - Error writing to connection: %v", sessionID, writeErr)
-						return
-					}
-
-					if verbose {
-						log.Printf("Client: Session %s - Received %d bytes from server (seq %d)", sessionID, len(data), packet.Sequence)
-					}
-				}
-
-			case PacketTypeClose:
+			// Check sequence order - if not the next expected, buffer it
+			if packet.Sequence != nextExpectedSequence {
+				pendingPackets[packet.Sequence] = packet
 				if verbose {
-					log.Printf("Client: Session %s - Received close packet from server", sessionID)
+					log.Printf("Client: Session %s - Buffering out-of-order packet seq %d (expecting %d)", sessionID, packet.Sequence, nextExpectedSequence)
 				}
-				return
+				continue
+			}
+
+			// Process this packet and any consecutive buffered packets
+			packetsToProcess := []*Packet{packet}
+
+			// Collect consecutive packets from buffer
+			seq := nextExpectedSequence + 1
+			for {
+				if bufferedPacket, exists := pendingPackets[seq]; exists {
+					packetsToProcess = append(packetsToProcess, bufferedPacket)
+					delete(pendingPackets, seq)
+					seq++
+				} else {
+					break
+				}
+			}
+
+			// Process all packets in order
+			for _, pkt := range packetsToProcess {
+				// Mark as processed
+				processedSequences[pkt.Sequence] = true
+
+				// Process packet based on type
+				switch pkt.Type {
+				case PacketTypeData:
+					// Write data to client connection
+					if len(pkt.Data) > 0 {
+						data, err := pkt.GetData()
+						if err != nil {
+							log.Printf("Client: Session %s - Error decoding packet data: %v", sessionID, err)
+							continue
+						}
+
+						if _, writeErr := conn.Write(data); writeErr != nil {
+							log.Printf("Client: Session %s - Error writing to connection: %v", sessionID, writeErr)
+							return
+						}
+
+						if verbose {
+							log.Printf("Client: Session %s - Received %d bytes from server (seq %d)", sessionID, len(data), pkt.Sequence)
+						}
+					}
+
+				case PacketTypeClose:
+					if verbose {
+						log.Printf("Client: Session %s - Received close packet from server", sessionID)
+					}
+					return
+				}
+
+				// Update next expected sequence
+				nextExpectedSequence = pkt.Sequence + 1
 			}
 		}
 	}
