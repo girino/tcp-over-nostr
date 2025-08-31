@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -91,10 +93,21 @@ func generatePacketID() string {
 	return fmt.Sprintf("pkt_%d_%d", time.Now().UnixNano(), time.Now().Nanosecond()%1000000)
 }
 
-// GetPacketFilename generates a filename for the packet
+// GetPacketFilename generates a SHA256-based filename for the packet
 func (p *Packet) GetPacketFilename(baseDir string) string {
-	return fmt.Sprintf("%s/%s_%s_%06d_%s.json",
-		baseDir, p.SessionID, p.Direction, p.Sequence, p.ID)
+	// Generate JSON content first
+	jsonData, err := p.ToJSON()
+	if err != nil {
+		// Fallback to a deterministic name if JSON fails
+		return fmt.Sprintf("%s/%s_%s_%06d_%s.json", 
+			baseDir, p.SessionID, p.Direction, p.Sequence, p.ID)
+	}
+	
+	// Generate SHA256 hash of the JSON content
+	hash := sha256.Sum256(jsonData)
+	hashString := hex.EncodeToString(hash[:])
+	
+	return fmt.Sprintf("%s/%s.json", baseDir, hashString)
 }
 
 // CreateOpenPacket creates a session open packet

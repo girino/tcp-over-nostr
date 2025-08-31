@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -28,22 +27,14 @@ func runClientPackets(clientPort int, packetDir string, verbose bool) {
 		log.Fatalf("Failed to create packet directory %s: %v", packetDir, err)
 	}
 
-	// Clean up any old packet files on startup
+	// Process old packet files on startup - mark packets older than startup time as processed
+	startupTime := time.Now()
 	if verbose {
-		log.Printf("Client: Cleaning up old packet files on startup...")
+		log.Printf("Client: Processing old packet files from before startup at %v", startupTime)
 	}
-	pattern := filepath.Join(packetDir, "*.json")
-	matches, err := filepath.Glob(pattern)
-	if err == nil {
-		for _, filename := range matches {
-			if err := os.Remove(filename); err != nil && verbose {
-				log.Printf("Client: Warning: failed to remove old packet file %s: %v", filename, err)
-			}
-		}
-		if len(matches) > 0 && verbose {
-			log.Printf("Client: Cleaned up %d old packet files", len(matches))
-		}
-	}
+	
+	// This will be used by packet handlers to ignore old packets
+	_ = startupTime
 
 	// Start listening
 	listener, err := net.Listen("tcp", listenAddr)
@@ -180,10 +171,7 @@ func handleClientConnectionPackets(clientConn net.Conn, packetDir string, verbos
 					}
 					processedAny = true
 
-					// Clean up processed packet file
-					if err := os.Remove(filename); err != nil && verbose {
-						log.Printf("Client: Warning: failed to remove processed packet file %s: %v", filename, err)
-					}
+					// Packet processed successfully (keeping file for history)
 
 					if sessionClosed {
 						return

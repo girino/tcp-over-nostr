@@ -13,17 +13,19 @@ import (
 
 // PacketHandler manages packet file operations
 type PacketHandler struct {
-	baseDir   string
-	sessionID string
-	verbose   bool
+	baseDir        string
+	sessionID      string
+	verbose        bool
+	processedFiles map[string]*Packet // Cache of processed packets by filename
 }
 
 // NewPacketHandler creates a new packet handler
 func NewPacketHandler(baseDir, sessionID string, verbose bool) *PacketHandler {
 	return &PacketHandler{
-		baseDir:   baseDir,
-		sessionID: sessionID,
-		verbose:   verbose,
+		baseDir:        baseDir,
+		sessionID:      sessionID,
+		verbose:        verbose,
+		processedFiles: make(map[string]*Packet),
 	}
 }
 
@@ -55,8 +57,13 @@ func (ph *PacketHandler) WritePacket(packet *Packet) error {
 	return nil
 }
 
-// ReadPacket reads a packet from a file
+// ReadPacket reads a packet from a file, using cache when possible
 func (ph *PacketHandler) ReadPacket(filename string) (*Packet, error) {
+	// Check cache first
+	if packet, exists := ph.processedFiles[filename]; exists {
+		return packet, nil
+	}
+
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read packet file %s: %v", filename, err)
@@ -67,6 +74,9 @@ func (ph *PacketHandler) ReadPacket(filename string) (*Packet, error) {
 		return nil, fmt.Errorf("failed to parse packet from %s: %v", filename, err)
 	}
 
+	// Cache the parsed packet
+	ph.processedFiles[filename] = packet
+
 	if ph.verbose {
 		log.Printf("PacketHandler: Read packet %s from %s", packet.ID, filename)
 	}
@@ -74,41 +84,86 @@ func (ph *PacketHandler) ReadPacket(filename string) (*Packet, error) {
 	return packet, nil
 }
 
-// GetPacketFiles returns all packet files for a specific direction, sorted by sequence
+// GetPacketFiles returns all packet files for a specific session and direction, sorted by sequence
 func (ph *PacketHandler) GetPacketFiles(direction string) ([]string, error) {
-	pattern := fmt.Sprintf("%s_%s_*.json", ph.sessionID, direction)
-	matches, err := filepath.Glob(filepath.Join(ph.baseDir, pattern))
+	// Get all JSON files in the directory
+	pattern := "*.json"
+	allFiles, err := filepath.Glob(filepath.Join(ph.baseDir, pattern))
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob packet files: %v", err)
 	}
 
-	// Sort by sequence number
-	sort.Slice(matches, func(i, j int) bool {
-		return extractSequence(matches[i]) < extractSequence(matches[j])
+	var matchingFiles []string
+
+	// Process files, using cache when available
+	for _, filename := range allFiles {
+		var packet *Packet
+		var err error
+
+		// Try cache first
+		if cachedPacket, exists := ph.processedFiles[filename]; exists {
+			packet = cachedPacket
+		} else {
+			// Only read and parse if not in cache
+			packet, err = ph.ReadPacket(filename)
+			if err != nil {
+				// Skip files that can't be parsed as packets
+				continue
+			}
+		}
+
+		// Check if this packet matches our session and direction
+		if packet.SessionID == ph.sessionID && packet.Direction == direction {
+			matchingFiles = append(matchingFiles, filename)
+		}
+	}
+
+	// Sort by sequence number (using cached packets for efficiency)
+	sort.Slice(matchingFiles, func(i, j int) bool {
+		packet1 := ph.processedFiles[matchingFiles[i]]
+		packet2 := ph.processedFiles[matchingFiles[j]]
+		return packet1.Sequence < packet2.Sequence
 	})
 
-	return matches, nil
+	return matchingFiles, nil
 }
 
 // GetAllPacketFiles returns all packet files for the session, sorted by timestamp
 func (ph *PacketHandler) GetAllPacketFiles() ([]string, error) {
-	pattern := fmt.Sprintf("%s_*.json", ph.sessionID)
-	matches, err := filepath.Glob(filepath.Join(ph.baseDir, pattern))
+	// Get all JSON files in the directory
+	pattern := "*.json"
+	allFiles, err := filepath.Glob(filepath.Join(ph.baseDir, pattern))
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob packet files: %v", err)
 	}
 
-	// Sort by modification time
-	sort.Slice(matches, func(i, j int) bool {
-		info1, err1 := os.Stat(matches[i])
-		info2, err2 := os.Stat(matches[j])
+	var matchingFiles []string
+
+	// Parse each file to check if it matches our session
+	for _, filename := range allFiles {
+		packet, err := ph.ReadPacket(filename)
+		if err != nil {
+			// Skip files that can't be parsed as packets
+			continue
+		}
+
+		// Check if this packet matches our session
+		if packet.SessionID == ph.sessionID {
+			matchingFiles = append(matchingFiles, filename)
+		}
+	}
+
+	// Sort by packet timestamp
+	sort.Slice(matchingFiles, func(i, j int) bool {
+		packet1, err1 := ph.ReadPacket(matchingFiles[i])
+		packet2, err2 := ph.ReadPacket(matchingFiles[j])
 		if err1 != nil || err2 != nil {
 			return false
 		}
-		return info1.ModTime().Before(info2.ModTime())
+		return packet1.Timestamp.Before(packet2.Timestamp)
 	})
 
-	return matches, nil
+	return matchingFiles, nil
 }
 
 // WatchForPackets monitors the directory for new packet files of a specific direction
@@ -146,26 +201,11 @@ func (ph *PacketHandler) WatchForPackets(direction string, callback func(*Packet
 	}
 }
 
-// CleanupSession removes all packet files for the session
+// CleanupSession is deprecated - packets are now persistent and never deleted
 func (ph *PacketHandler) CleanupSession() error {
-	pattern := fmt.Sprintf("%s_*.json", ph.sessionID)
-	matches, err := filepath.Glob(filepath.Join(ph.baseDir, pattern))
-	if err != nil {
-		return fmt.Errorf("failed to glob packet files for cleanup: %v", err)
+	if ph.verbose {
+		log.Printf("PacketHandler: Session %s complete - packets preserved for future reference", ph.sessionID)
 	}
-
-	for _, filename := range matches {
-		if err := os.Remove(filename); err != nil {
-			if ph.verbose {
-				log.Printf("PacketHandler: Warning: failed to remove %s: %v", filename, err)
-			}
-		}
-	}
-
-	if ph.verbose && len(matches) > 0 {
-		log.Printf("PacketHandler: Cleaned up %d packet files for session %s", len(matches), ph.sessionID)
-	}
-
 	return nil
 }
 
@@ -184,19 +224,6 @@ func (ph *PacketHandler) GetNewPacketFiles(direction string, processedFiles map[
 	}
 
 	return newFiles, nil
-}
-
-// extractSequence extracts sequence number from filename
-func extractSequence(filename string) uint64 {
-	base := filepath.Base(filename)
-	parts := strings.Split(base, "_")
-	if len(parts) < 3 {
-		return 0
-	}
-
-	var seq uint64
-	fmt.Sscanf(parts[2], "%06d", &seq)
-	return seq
 }
 
 // WalkPacketDir walks through packet directory and processes files

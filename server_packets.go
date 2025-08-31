@@ -31,35 +31,55 @@ func runServerPackets(targetHost string, targetPort int, packetDir string, verbo
 		log.Fatalf("Failed to create packet directory %s: %v", packetDir, err)
 	}
 
-	// Clean up any old packet files on startup
+	// Process old packet files on startup - mark packets older than startup time as processed
+	startupTime := time.Now()
 	if verbose {
-		log.Printf("Server: Cleaning up old packet files on startup...")
-	}
-	pattern := filepath.Join(packetDir, "*.json")
-	matches, err := filepath.Glob(pattern)
-	if err == nil {
-		for _, filename := range matches {
-			if err := os.Remove(filename); err != nil && verbose {
-				log.Printf("Server: Warning: failed to remove old packet file %s: %v", filename, err)
-			}
-		}
-		if len(matches) > 0 && verbose {
-			log.Printf("Server: Cleaned up %d old packet files", len(matches))
-		}
+		log.Printf("Server: Processing old packet files from before startup at %v", startupTime)
 	}
 
 	fmt.Printf("TCP proxy server started successfully. Monitoring for packets...\n\n")
 
 	// Monitor for new session open packets
-	monitorSessionPackets(packetDir, targetAddr, verbose)
+	monitorSessionPackets(packetDir, targetAddr, startupTime, verbose)
 }
 
-func monitorSessionPackets(packetDir, targetAddr string, verbose bool) {
+func monitorSessionPackets(packetDir, targetAddr string, startupTime time.Time, verbose bool) {
 	processedSessions := make(map[string]bool)
+	processedFiles := make(map[string]bool)
+	
+	// First, scan all existing files and mark old packets as processed
+	pattern := filepath.Join(packetDir, "*.json")
+	existingFiles, err := filepath.Glob(pattern)
+	if err == nil {
+		for _, filename := range existingFiles {
+			data, err := os.ReadFile(filename)
+			if err != nil {
+				continue
+			}
+			
+			packet, err := FromJSON(data)
+			if err != nil {
+				// Not a valid packet file, mark as processed anyway
+				processedFiles[filename] = true
+				continue
+			}
+			
+			// If packet is older than startup time, mark as processed
+			if packet.Timestamp.Before(startupTime) {
+				processedFiles[filename] = true
+				if verbose {
+					log.Printf("Server: Marking old packet %s (created %v) as already processed", packet.ID, packet.Timestamp)
+				}
+			}
+		}
+		if verbose {
+			log.Printf("Server: Marked %d existing packets as already processed", len(processedFiles))
+		}
+	}
 
-		for {
-		// Find open packets for new sessions (only look at sequence 000000 for open packets)
-		pattern := filepath.Join(packetDir, "*_client_to_server_000000_*.json")
+	for {
+		// Find all JSON files in the packet directory
+		pattern := filepath.Join(packetDir, "*.json")
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			if verbose {
@@ -70,37 +90,44 @@ func monitorSessionPackets(packetDir, targetAddr string, verbose bool) {
 		}
 
 		for _, filename := range matches {
-			// Read the packet to verify it's an open packet
+			// Skip already processed files
+			if processedFiles[filename] {
+				continue
+			}
+
+			// Read and parse the packet
 			data, err := os.ReadFile(filename)
 			if err != nil {
 				if verbose {
-					log.Printf("Server: Error reading potential open packet %s: %v", filename, err)
+					log.Printf("Server: Error reading packet file %s: %v", filename, err)
 				}
 				continue
 			}
-			
+
 			packet, err := FromJSON(data)
 			if err != nil {
-				if verbose {
-					log.Printf("Server: Error parsing potential open packet %s: %v", filename, err)
-				}
+				// Not a valid packet file, skip
+				processedFiles[filename] = true
 				continue
 			}
-			
-			// Only process if it's actually an open packet
-			if packet.Type != PacketTypeOpen {
+
+			// Mark file as processed
+			processedFiles[filename] = true
+
+			// Only process open packets to start new sessions
+			if packet.Type != PacketTypeOpen || packet.Direction != "client_to_server" {
 				continue
 			}
-			
+
 			sessionID := packet.SessionID
-			
+
 			if !processedSessions[sessionID] {
 				processedSessions[sessionID] = true
-				
+
 				if verbose {
 					log.Printf("Server: Found new session %s", sessionID)
 				}
-				
+
 				// Handle this session in a goroutine
 				go handleServerSessionPackets(sessionID, packetDir, targetAddr, verbose)
 			}
@@ -245,10 +272,7 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 					processedSequences[packet.Sequence] = true
 					processedAny = true
 
-					// Clean up processed packet file
-					if err := os.Remove(filename); err != nil && verbose {
-						log.Printf("Server: Warning: failed to remove processed packet file %s: %v", filename, err)
-					}
+									// Packet processed successfully (keeping file for history)
 					continue
 				}
 
@@ -290,10 +314,7 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 						}
 						sessionActive = false
 
-						// Clean up processed packet file
-						if err := os.Remove(filename); err != nil && verbose {
-							log.Printf("Server: Warning: failed to remove processed packet file %s: %v", filename, err)
-						}
+										// Packet processed successfully (keeping file for history)
 						return
 
 					case PacketTypeHeartbeat:
@@ -311,10 +332,7 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 					nextExpectedSequence++
 					processedAny = true
 
-					// Clean up processed packet file
-					if err := os.Remove(filename); err != nil && verbose {
-						log.Printf("Server: Warning: failed to remove processed packet file %s: %v", filename, err)
-					}
+									// Packet processed successfully (keeping file for history)
 				}
 			}
 
