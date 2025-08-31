@@ -5,6 +5,9 @@
 *.so
 *.dylib
 
+# Project executables
+tcp-proxy
+
 # Test binary, built with `go test -c`
 *.test
 
