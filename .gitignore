@@ -47,3 +47,6 @@ nostr-keys.json
 # Temporary files
 tmp/
 temp/
+
+# Social media and promotional materials
+SOCIAL_MEDIA_ANNOUNCEMENT.md
