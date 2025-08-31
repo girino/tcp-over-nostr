@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -67,6 +68,15 @@ func runClientNostr(clientPort int, nostrDir, serverPubkey, keysFile string, ver
 		// Handle each connection in a goroutine
 		go handleClientConnectionNostr(conn, eventHandler, serverPubkey, clientKeys.PublicKey, startupTime, verbose)
 	}
+}
+
+func sanitizeSessionID(sessionID string) string {
+	// Replace problematic characters that might cause issues in filenames
+	sessionID = strings.ReplaceAll(sessionID, ":", "_")
+	sessionID = strings.ReplaceAll(sessionID, ".", "_")
+	sessionID = strings.ReplaceAll(sessionID, "/", "_")
+	sessionID = strings.ReplaceAll(sessionID, "\\", "_")
+	return sessionID
 }
 
 func handleClientConnectionNostr(conn net.Conn, eventHandler *NostrEventHandler, serverPubkey, clientPubkey string, startupTime time.Time, verbose bool) {

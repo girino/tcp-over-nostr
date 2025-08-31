@@ -8,11 +8,6 @@
 # Project executables
 tcp-proxy
 
-# Communication files
-input*
-output*
-packets/
-
 # Test binary, built with `go test -c`
 *.test
 
@@ -41,17 +36,14 @@ go.work
 ehthumbs.db
 Thumbs.db
 
+# Nostr-specific files
+events/
+*-keys.json
+nostr-keys.json
+
 # Log files
 *.log
 
 # Temporary files
 tmp/
 temp/
-events/
-
-# Nostr key files (contain sensitive private keys)
-*-keys.json
-nostr-keys.json
-
-# Log files
-*.log
