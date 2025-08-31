@@ -30,7 +30,7 @@ func main() {
 	// Nostr flags
 	var nostrDir = flag.String("nostr-dir", "events", "Directory for Nostr event files")
 	var serverKey = flag.String("server-key", "", "Server's Nostr public key (required for client in nostr-mode)")
-	var keysFile = flag.String("keys-file", "nostr-keys.json", "File to store Nostr key pair")
+	var keysFile = flag.String("keys-file", "", "File to store Nostr key pair (default: client-keys.json or server-keys.json)")
 
 	var verbose = flag.Bool("verbose", false, "Enable verbose logging")
 
@@ -49,7 +49,7 @@ func main() {
 		if *nostrMode {
 			fmt.Fprintf(os.Stderr, "  -nostr-dir string    Directory for Nostr event files (default \"events\")\n")
 			fmt.Fprintf(os.Stderr, "  -server-key string   Server's Nostr public key (required)\n")
-			fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"nostr-keys.json\")\n")
+			fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"client-keys.json\")\n")
 		} else if *packetMode {
 			fmt.Fprintf(os.Stderr, "  -packet-dir string   Directory for packet files (default \"packets\")\n")
 		} else {
@@ -62,7 +62,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -target-port int     Target port to proxy to (default 80)\n")
 		if *nostrMode {
 			fmt.Fprintf(os.Stderr, "  -nostr-dir string    Directory for Nostr event files (default \"events\")\n")
-			fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"nostr-keys.json\")\n")
+			fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"server-keys.json\")\n")
 		} else if *packetMode {
 			fmt.Fprintf(os.Stderr, "  -packet-dir string   Directory for packet files (default \"packets\")\n")
 		} else {
@@ -88,6 +88,17 @@ func main() {
 	// Check for conflicting communication modes
 	if *packetMode && *nostrMode {
 		log.Fatal("Cannot use both -packet-mode and -nostr-mode simultaneously")
+	}
+
+	// Set default key file names if not specified
+	if *keysFile == "" {
+		if *mode == "client" {
+			*keysFile = "client-keys.json"
+		} else if *mode == "server" {
+			*keysFile = "server-keys.json"
+		} else {
+			*keysFile = "nostr-keys.json"
+		}
 	}
 
 	switch *mode {
