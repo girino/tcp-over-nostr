@@ -3,116 +3,56 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"log"
-	"net"
+	"os"
 )
 
 func main() {
-	// Command line flags
-	var listenPort = flag.Int("listen", 8080, "Port to listen on")
+	// Mode selection
+	var mode = flag.String("mode", "", "Mode to run: 'client' or 'server' (required)")
+	
+	// Client flags
+	var clientPort = flag.Int("client-port", 8080, "Port for client to listen on")
+	
+	// Server flags  
 	var targetHost = flag.String("target-host", "localhost", "Target host to proxy to")
 	var targetPort = flag.Int("target-port", 80, "Target port to proxy to")
+	
+	// Shared flags
+	var inputFile = flag.String("input-file", "input", "File for communication (input for client, pattern for server)")
+	var outputFile = flag.String("output-file", "output", "File for communication (output for client, pattern for server)")
 	var verbose = flag.Bool("verbose", false, "Enable verbose logging")
-
+	
 	flag.Parse()
 
-	// Validate inputs
-	if *listenPort < 1 || *listenPort > 65535 {
-		log.Fatal("Listen port must be between 1 and 65535")
-	}
-	if *targetPort < 1 || *targetPort > 65535 {
-		log.Fatal("Target port must be between 1 and 65535")
-	}
-	if *targetHost == "" {
-		log.Fatal("Target host cannot be empty")
-	}
-
-	listenAddr := fmt.Sprintf(":%d", *listenPort)
-	targetAddr := fmt.Sprintf("%s:%d", *targetHost, *targetPort)
-
-	fmt.Printf("Starting TCP proxy:\n")
-	fmt.Printf("  Listening on: %s\n", listenAddr)
-	fmt.Printf("  Proxying to: %s\n", targetAddr)
-	fmt.Printf("  Verbose logging: %v\n", *verbose)
-
-	// Start listening
-	listener, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		log.Fatalf("Failed to listen on %s: %v", listenAddr, err)
-	}
-	defer listener.Close()
-
-	fmt.Printf("TCP proxy started successfully. Press Ctrl+C to stop.\n\n")
-
-	// Accept connections
-	for {
-		clientConn, err := listener.Accept()
-		if err != nil {
-			if *verbose {
-				log.Printf("Failed to accept connection: %v", err)
-			}
-			continue
-		}
-
-		// Handle each connection in a goroutine
-		go handleConnection(clientConn, targetAddr, *verbose)
-	}
-}
-
-func handleConnection(clientConn net.Conn, targetAddr string, verbose bool) {
-	defer clientConn.Close()
-
-	clientAddr := clientConn.RemoteAddr().String()
-	if verbose {
-		log.Printf("New connection from %s", clientAddr)
+	if *mode == "" {
+		fmt.Fprintf(os.Stderr, "Usage: %s -mode <client|server> [options]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Modes:\n")
+		fmt.Fprintf(os.Stderr, "  client: Accept TCP connections and write to input file\n")
+		fmt.Fprintf(os.Stderr, "  server: Read from input file and connect to target host\n\n")
+		fmt.Fprintf(os.Stderr, "Client mode options:\n")
+		fmt.Fprintf(os.Stderr, "  -client-port int     Port for client to listen on (default 8080)\n")
+		fmt.Fprintf(os.Stderr, "  -input-file string   File to write client data to (default \"input\")\n")
+		fmt.Fprintf(os.Stderr, "  -output-file string  File to read server responses from (default \"output\")\n")
+		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n\n")
+		fmt.Fprintf(os.Stderr, "Server mode options:\n")
+		fmt.Fprintf(os.Stderr, "  -target-host string  Target host to proxy to (default \"localhost\")\n")
+		fmt.Fprintf(os.Stderr, "  -target-port int     Target port to proxy to (default 80)\n")
+		fmt.Fprintf(os.Stderr, "  -input-file string   File pattern to read client data from (default \"input\")\n")
+		fmt.Fprintf(os.Stderr, "  -output-file string  File pattern to write server responses to (default \"output\")\n")
+		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  %s -mode client -client-port 8080 -verbose\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -mode server -target-host google.com -target-port 80 -verbose\n", os.Args[0])
+		os.Exit(1)
 	}
 
-	// Connect to target server
-	targetConn, err := net.Dial("tcp", targetAddr)
-	if err != nil {
-		if verbose {
-			log.Printf("Failed to connect to target %s: %v", targetAddr, err)
-		}
-		return
-	}
-	defer targetConn.Close()
-
-	if verbose {
-		log.Printf("Connected to target %s for client %s", targetAddr, clientAddr)
-	}
-
-	// Start proxying data in both directions
-	done := make(chan bool, 2)
-
-	// Client -> Target
-	go func() {
-		defer func() { done <- true }()
-		bytesWritten, err := io.Copy(targetConn, clientConn)
-		if verbose && err != nil {
-			log.Printf("Error copying from client %s to target: %v", clientAddr, err)
-		}
-		if verbose {
-			log.Printf("Client %s -> Target: %d bytes", clientAddr, bytesWritten)
-		}
-	}()
-
-	// Target -> Client
-	go func() {
-		defer func() { done <- true }()
-		bytesWritten, err := io.Copy(clientConn, targetConn)
-		if verbose && err != nil {
-			log.Printf("Error copying from target to client %s: %v", clientAddr, err)
-		}
-		if verbose {
-			log.Printf("Target -> Client %s: %d bytes", clientAddr, bytesWritten)
-		}
-	}()
-
-	// Wait for either direction to finish
-	<-done
-
-	if verbose {
-		log.Printf("Connection with client %s closed", clientAddr)
+	switch *mode {
+	case "client":
+		runClient(*clientPort, *inputFile, *outputFile, *verbose)
+	case "server":
+		runServer(*targetHost, *targetPort, *inputFile, *outputFile, *verbose)
+	default:
+		log.Fatalf("Invalid mode '%s'. Must be 'client' or 'server'", *mode)
 	}
 }

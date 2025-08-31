@@ -8,6 +8,10 @@
 # Project executables
 tcp-proxy
 
+# Communication files
+input*
+output*
+
 # Test binary, built with `go test -c`
 *.test
 
