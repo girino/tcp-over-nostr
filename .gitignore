@@ -47,3 +47,11 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+events/
+
+# Nostr key files (contain sensitive private keys)
+*-keys.json
+nostr-keys.json
+
+# Log files
+*.log
