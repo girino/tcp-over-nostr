@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func runClientNostr(clientPort int, nostrDir, serverPubkey, keysFile string, verbose bool) {
+func runClientNostr(clientPort int, relayURL, serverPubkey, keysFile string, verbose bool) {
 	// Validate inputs
 	if clientPort < 1 || clientPort > 65535 {
 		log.Fatal("Client port must be between 1 and 65535")
@@ -22,26 +22,29 @@ func runClientNostr(clientPort int, nostrDir, serverPubkey, keysFile string, ver
 	fmt.Printf("Starting TCP proxy client (Nostr mode):\n")
 	fmt.Printf("  Listen port: %d\n", clientPort)
 	fmt.Printf("  Server pubkey: %s\n", serverPubkey)
-	fmt.Printf("  Events directory: %s\n", nostrDir)
+	fmt.Printf("  Relay URL: %s\n", relayURL)
 	fmt.Printf("  Keys file: %s\n", keysFile)
 	fmt.Printf("  Verbose logging: %t\n\n", verbose)
 
 	// Initialize key manager
-	keyMgr := NewKeyManager(keysFile, verbose)
-	if err := keyMgr.LoadOrGenerateKeys(); err != nil {
-		log.Fatalf("Failed to initialize keys: %v", err)
+	keyMgr := NewKeyManager(keysFile)
+	if err := keyMgr.LoadKeys(); err != nil {
+		log.Fatalf("Failed to load/generate keys: %v", err)
 	}
 
 	clientKeys := keyMgr.GetKeys()
 	fmt.Printf("Client Nostr pubkey: %s\n\n", clientKeys.PublicKey)
 
-	// Initialize Nostr event handler
-	eventHandler := NewNostrEventHandler(nostrDir, keyMgr, verbose)
+	// Initialize relay handler
+	relayHandler, err := NewNostrRelayHandler(relayURL, keyMgr, verbose)
+	if err != nil {
+		log.Fatalf("Failed to connect to relay: %v", err)
+	}
+	defer relayHandler.Close()
 
-	// Process old events on startup - mark events older than startup time as processed
-	startupTime := time.Now()
-	if verbose {
-		log.Printf("Client: Processing old events from before startup at %v", startupTime)
+	// Subscribe to events from the server
+	if err := relayHandler.SubscribeToEvents(clientKeys.PublicKey); err != nil {
+		log.Fatalf("Failed to subscribe to events: %v", err)
 	}
 
 	// Start listening
@@ -66,7 +69,7 @@ func runClientNostr(clientPort int, nostrDir, serverPubkey, keysFile string, ver
 		}
 
 		// Handle each connection in a goroutine
-		go handleClientConnectionNostr(conn, eventHandler, serverPubkey, clientKeys.PublicKey, startupTime, verbose)
+		go handleClientConnectionNostr(conn, relayHandler, keyMgr, serverPubkey, clientKeys.PublicKey, verbose)
 	}
 }
 
@@ -79,7 +82,7 @@ func sanitizeSessionID(sessionID string) string {
 	return sessionID
 }
 
-func handleClientConnectionNostr(conn net.Conn, eventHandler *NostrEventHandler, serverPubkey, clientPubkey string, startupTime time.Time, verbose bool) {
+func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler, keyMgr *KeyManager, serverPubkey, clientPubkey string, verbose bool) {
 	defer conn.Close()
 
 	clientAddr := conn.RemoteAddr().String()
@@ -92,14 +95,14 @@ func handleClientConnectionNostr(conn net.Conn, eventHandler *NostrEventHandler,
 
 	// Send open packet
 	openPacket := CreateOpenPacket(sessionID, "client_to_server", "", 0, clientAddr)
-	if err := sendNostrPacket(eventHandler, openPacket, serverPubkey, verbose); err != nil {
+	if err := sendNostrPacket(relayHandler, keyMgr, openPacket, serverPubkey, verbose); err != nil {
 		log.Printf("Client: Failed to send open packet: %v", err)
 		return
 	}
 
 	// Start goroutine to read server responses
 	done := make(chan bool, 2)
-	go readServerNostrResponses(eventHandler, sessionID, clientPubkey, conn, startupTime, done, verbose)
+	go readServerNostrResponses(relayHandler, sessionID, clientPubkey, conn, done, verbose)
 
 	// Read data from client connection and send as packets
 	sequence := uint64(1) // Start at 1 (open packet is 0)
@@ -119,7 +122,7 @@ func handleClientConnectionNostr(conn net.Conn, eventHandler *NostrEventHandler,
 		if n > 0 {
 			// Create data packet
 			dataPacket := CreateDataPacket(sessionID, "client_to_server", sequence, buffer[:n])
-			if err := sendNostrPacket(eventHandler, dataPacket, serverPubkey, verbose); err != nil {
+			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, serverPubkey, verbose); err != nil {
 				log.Printf("Client: Failed to send data packet: %v", err)
 				break
 			}
@@ -133,7 +136,7 @@ func handleClientConnectionNostr(conn net.Conn, eventHandler *NostrEventHandler,
 
 	// Send close packet
 	closePacket := CreateClosePacket(sessionID, "client_to_server", sequence, "")
-	if err := sendNostrPacket(eventHandler, closePacket, serverPubkey, verbose); err != nil {
+	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, serverPubkey, verbose); err != nil {
 		log.Printf("Client: Failed to send close packet: %v", err)
 	}
 
@@ -143,141 +146,89 @@ func handleClientConnectionNostr(conn net.Conn, eventHandler *NostrEventHandler,
 	}
 }
 
-func readServerNostrResponses(eventHandler *NostrEventHandler, sessionID, clientPubkey string, conn net.Conn, startupTime time.Time, done chan bool, verbose bool) {
+func readServerNostrResponses(relayHandler *NostrRelayHandler, sessionID, clientPubkey string, conn net.Conn, done chan bool, verbose bool) {
 	defer func() { done <- true }()
 
 	processedSequences := make(map[uint64]bool)
-	processedFiles := make(map[string]bool) // Track processed filenames
-	nextExpectedSequence := uint64(0)
 
 	for {
 		select {
 		case <-done:
 			return
-		default:
-			// Check for new events
-			eventFiles, err := eventHandler.GetEventFiles(clientPubkey, startupTime)
-			if err != nil {
-				if verbose {
-					log.Printf("Client: Error getting event files: %v", err)
-				}
-				time.Sleep(100 * time.Millisecond)
+		case event := <-relayHandler.GetEventChannel():
+			// Check if this event is for us
+			if !IsEventForMe(event, clientPubkey) {
 				continue
 			}
 
-			processedAny := false
-			sessionClosed := false
-
-			for _, filename := range eventFiles {
-				// Skip if this file has already been processed
-				if processedFiles[filename] {
-					continue
+			// Parse packet from event
+			packet, err := ParseNostrEvent(event)
+			if err != nil {
+				if verbose {
+					log.Printf("Client: Error parsing packet from event: %v", err)
 				}
-
-				if processedSequences[nextExpectedSequence] {
-					nextExpectedSequence++
-					continue
-				}
-
-				event, err := eventHandler.ReadEvent(filename)
-				if err != nil {
-					if verbose {
-						log.Printf("Client: Error reading event file %s: %v", filename, err)
-					}
-					continue
-				}
-
-				// Parse packet from event
-				packet, err := ParseNostrEvent(event)
-				if err != nil {
-					if verbose {
-						log.Printf("Client: Error parsing packet from event: %v", err)
-					}
-					continue
-				}
-
-				// Check if this packet belongs to our session
-				if packet.SessionID != sessionID {
-					continue
-				}
-
-				// Check direction - we want server_to_client packets
-				if packet.Direction != "server_to_client" {
-					continue
-				}
-
-				// Check sequence order
-				if packet.Sequence != nextExpectedSequence {
-					continue
-				}
-
-				// Process packet based on type
-				switch packet.Type {
-				case PacketTypeData:
-					// Write data to client connection
-					if len(packet.Data) > 0 {
-						data, err := packet.GetData()
-						if err != nil {
-							log.Printf("Client: Session %s - Error decoding packet data: %v", sessionID, err)
-							continue
-						}
-
-						if _, writeErr := conn.Write(data); writeErr != nil {
-							if verbose {
-								log.Printf("Client: Session %s - Error writing to client: %v", sessionID, writeErr)
-							}
-							return
-						}
-
-						if verbose {
-							log.Printf("Client: Session %s - Wrote %d bytes to client (seq %d)", sessionID, len(data), packet.Sequence)
-						}
-					}
-
-				case PacketTypeClose:
-					if verbose {
-						log.Printf("Client: Session %s - Received server close packet", sessionID)
-					}
-					sessionClosed = true
-
-				case PacketTypeHeartbeat:
-					if verbose {
-						log.Printf("Client: Session %s - Received server heartbeat", sessionID)
-					}
-				}
-
-				// Mark sequence as processed
-				processedSequences[packet.Sequence] = true
-				processedFiles[filename] = true // Mark file as processed
-				if packet.Type != PacketTypeHeartbeat {
-					nextExpectedSequence++
-				}
-				processedAny = true
-
-				// Event processed successfully (keeping file for history)
-
-				if sessionClosed {
-					return
-				}
+				continue
 			}
 
-			if !processedAny {
-				time.Sleep(50 * time.Millisecond)
+			// Check if this packet belongs to our session
+			if packet.SessionID != sessionID {
+				continue
+			}
+
+			// Check direction - we want server_to_client packets
+			if packet.Direction != "server_to_client" {
+				continue
+			}
+
+			// Skip if already processed
+			if processedSequences[packet.Sequence] {
+				continue
+			}
+
+			// Mark as processed
+			processedSequences[packet.Sequence] = true
+
+			// Process packet based on type
+			switch packet.Type {
+			case PacketTypeData:
+				// Write data to client connection
+				if len(packet.Data) > 0 {
+					data, err := packet.GetData()
+					if err != nil {
+						log.Printf("Client: Session %s - Error decoding packet data: %v", sessionID, err)
+						continue
+					}
+
+					if _, writeErr := conn.Write(data); writeErr != nil {
+						log.Printf("Client: Session %s - Error writing to connection: %v", sessionID, writeErr)
+						return
+					}
+
+					if verbose {
+						log.Printf("Client: Session %s - Received %d bytes from server (seq %d)", sessionID, len(data), packet.Sequence)
+					}
+				}
+
+			case PacketTypeClose:
+				if verbose {
+					log.Printf("Client: Session %s - Received close packet from server", sessionID)
+				}
+				return
 			}
 		}
 	}
 }
 
-func sendNostrPacket(eventHandler *NostrEventHandler, packet *Packet, targetPubkey string, verbose bool) error {
+func sendNostrPacket(relayHandler *NostrRelayHandler, keyMgr *KeyManager, packet *Packet, targetPubkey string, verbose bool) error {
 	// Create Nostr event for the packet
-	event, err := eventHandler.keyMgr.CreateNostrEvent(packet, targetPubkey)
+	event, err := keyMgr.CreateNostrEvent(packet, targetPubkey)
 	if err != nil {
 		return fmt.Errorf("failed to create Nostr event: %v", err)
 	}
 
-	// Write event to disk
-	if err := eventHandler.WriteEvent(event); err != nil {
-		return fmt.Errorf("failed to write Nostr event: %v", err)
+	// Publish event to relay
+	if err := relayHandler.PublishEvent(event); err != nil {
+		return fmt.Errorf("failed to publish Nostr event: %v", err)
 	}
 
 	if verbose {

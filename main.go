@@ -19,7 +19,7 @@ func main() {
 	var targetPort = flag.Int("target-port", 80, "Target port to proxy to")
 
 	// Nostr flags
-	var nostrDir = flag.String("nostr-dir", "events", "Directory for Nostr event files")
+	var relay = flag.String("relay", "ws://localhost:10547", "Nostr relay URL for event communication")
 	var serverKey = flag.String("server-key", "", "Server's Nostr public key (required for client)")
 	var keysFile = flag.String("keys-file", "", "File to store Nostr key pair (default: client-keys.json or server-keys.json)")
 
@@ -37,20 +37,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -client-port int     Port for client to listen on (default 8080)\n")
 		fmt.Fprintf(os.Stderr, "  -server-key string   Server's Nostr public key (required)\n")
 		fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"client-keys.json\")\n")
-		fmt.Fprintf(os.Stderr, "  -nostr-dir string    Directory for Nostr event files (default \"events\")\n")
+		fmt.Fprintf(os.Stderr, "  -relay string        Nostr relay URL (default \"ws://localhost:10547\")\n")
 		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n\n")
 		fmt.Fprintf(os.Stderr, "Server mode options:\n")
 		fmt.Fprintf(os.Stderr, "  -target-host string  Target host to proxy to (default \"localhost\")\n")
 		fmt.Fprintf(os.Stderr, "  -target-port int     Target port to proxy to (default 80)\n")
 		fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"server-keys.json\")\n")
-		fmt.Fprintf(os.Stderr, "  -nostr-dir string    Directory for Nostr event files (default \"events\")\n")
+		fmt.Fprintf(os.Stderr, "  -relay string        Nostr relay URL (default \"ws://localhost:10547\")\n")
 		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n\n")
 		fmt.Fprintf(os.Stderr, "Examples:\n")
 		fmt.Fprintf(os.Stderr, "  # Start server (shows pubkey for client)\n")
-		fmt.Fprintf(os.Stderr, "  %s -mode server -target-host httpbin.org -target-port 80 -verbose\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -mode server -target-host httpbin.org -target-port 80 -relay ws://relay.damus.io\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Start client with server's pubkey\n")
-		fmt.Fprintf(os.Stderr, "  %s -mode client -server-key <server_pubkey> -client-port 8080 -verbose\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  # SSH tunnel example\n")
+		fmt.Fprintf(os.Stderr, "  %s -mode client -server-key <server_pubkey> -client-port 8080 -relay ws://relay.damus.io\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Local relay (nak) example\n")
 		fmt.Fprintf(os.Stderr, "  %s -mode server -target-host 192.168.1.100 -target-port 22\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -mode client -server-key <pubkey> -client-port 2222\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  ssh -p 2222 user@localhost\n\n")
@@ -73,9 +73,9 @@ func main() {
 
 	switch *mode {
 	case "client":
-		runClientNostr(*clientPort, *nostrDir, *serverKey, *keysFile, *verbose)
+		runClientNostr(*clientPort, *relay, *serverKey, *keysFile, *verbose)
 	case "server":
-		runServerNostr(*targetHost, *targetPort, *nostrDir, *keysFile, *verbose)
+		runServerNostr(*targetHost, *targetPort, *relay, *keysFile, *verbose)
 	default:
 		log.Fatalf("Invalid mode '%s'. Must be 'client' or 'server'", *mode)
 	}

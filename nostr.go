@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -21,66 +21,39 @@ type NostrKeys struct {
 	PublicKey  string `json:"public_key"`
 }
 
-// NostrPacketEvent wraps our packet data in a Nostr event
-type NostrPacketEvent struct {
-	Event  *nostr.Event `json:"event"`
-	Packet *Packet      `json:"-"` // Not serialized, computed from event content
-}
-
 // KeyManager handles Nostr key generation and storage
 type KeyManager struct {
 	keysFile string
 	keys     *NostrKeys
-	verbose  bool
 }
 
 // NewKeyManager creates a new key manager
-func NewKeyManager(keysFile string, verbose bool) *KeyManager {
+func NewKeyManager(keysFile string) *KeyManager {
 	return &KeyManager{
 		keysFile: keysFile,
-		verbose:  verbose,
 	}
 }
 
-// LoadOrGenerateKeys loads existing keys or generates new ones
-func (km *KeyManager) LoadOrGenerateKeys() error {
+// LoadKeys loads keys from file or generates new ones
+func (km *KeyManager) LoadKeys() error {
 	// Try to load existing keys
-	if _, err := os.Stat(km.keysFile); err == nil {
-		data, err := os.ReadFile(km.keysFile)
-		if err != nil {
-			return fmt.Errorf("failed to read keys file: %v", err)
-		}
-
-		var keys NostrKeys
-		if err := json.Unmarshal(data, &keys); err != nil {
+	if data, err := os.ReadFile(km.keysFile); err == nil {
+		if err := json.Unmarshal(data, &km.keys); err != nil {
 			return fmt.Errorf("failed to parse keys file: %v", err)
-		}
-
-		km.keys = &keys
-		if km.verbose {
-			log.Printf("Loaded existing Nostr keys from %s (pubkey: %s)", km.keysFile, keys.PublicKey)
 		}
 		return nil
 	}
 
-	// Generate new keys
-	if err := km.generateNewKeys(); err != nil {
-		return fmt.Errorf("failed to generate new keys: %v", err)
-	}
-
-	if km.verbose {
-		log.Printf("Generated new Nostr keys (pubkey: %s)", km.keys.PublicKey)
-	}
-
-	return nil
+	// Generate new keys if file doesn't exist
+	return km.GenerateKeys()
 }
 
-// generateNewKeys creates a new key pair and saves it
-func (km *KeyManager) generateNewKeys() error {
-	// Generate random private key (32 bytes)
+// GenerateKeys generates new Nostr keys
+func (km *KeyManager) GenerateKeys() error {
+	// Generate private key (32 random bytes)
 	privateKeyBytes := make([]byte, 32)
 	if _, err := rand.Read(privateKeyBytes); err != nil {
-		return fmt.Errorf("failed to generate random private key: %v", err)
+		return fmt.Errorf("failed to generate random bytes: %v", err)
 	}
 
 	privateKeyHex := hex.EncodeToString(privateKeyBytes)
@@ -95,6 +68,11 @@ func (km *KeyManager) generateNewKeys() error {
 	}
 
 	// Save keys to file
+	return km.SaveKeys()
+}
+
+// SaveKeys saves keys to file
+func (km *KeyManager) SaveKeys() error {
 	data, err := json.MarshalIndent(km.keys, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal keys: %v", err)
@@ -125,7 +103,7 @@ func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string) (*no
 		return nil, fmt.Errorf("keys not loaded")
 	}
 
-	// Serialize packet to JSON and base64 encode
+	// Serialize packet to JSON
 	packetJSON, err := packet.ToJSON()
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize packet: %v", err)
@@ -134,7 +112,7 @@ func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string) (*no
 	// Create Nostr event
 	event := &nostr.Event{
 		Kind:      9999,               // Custom kind for TCP proxy packets
-		Content:   string(packetJSON), // Base64 encoded packet JSON
+		Content:   string(packetJSON), // JSON packet as content
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags: nostr.Tags{
 			{"p", targetPubkey}, // Tag the target (server or client)
@@ -150,23 +128,130 @@ func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string) (*no
 	return event, nil
 }
 
-// ParseNostrEvent parses a Nostr event back to a packet
+// NostrRelayHandler handles communication with Nostr relays
+type NostrRelayHandler struct {
+	relay     *nostr.Relay
+	relayURL  string
+	keyMgr    *KeyManager
+	verbose   bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	eventChan chan *nostr.Event // Channel for received events
+	mu        sync.RWMutex      // Protects shared state
+}
+
+// NewNostrRelayHandler creates a new Nostr relay handler
+func NewNostrRelayHandler(relayURL string, keyMgr *KeyManager, verbose bool) (*NostrRelayHandler, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Connect to relay
+	relay, err := nostr.RelayConnect(ctx, relayURL)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to connect to relay %s: %v", relayURL, err)
+	}
+
+	handler := &NostrRelayHandler{
+		relay:     relay,
+		relayURL:  relayURL,
+		keyMgr:    keyMgr,
+		verbose:   verbose,
+		ctx:       ctx,
+		cancel:    cancel,
+		eventChan: make(chan *nostr.Event, 100), // Buffered channel
+	}
+
+	if verbose {
+		log.Printf("Connected to Nostr relay: %s", relayURL)
+	}
+
+	return handler, nil
+}
+
+// Close closes the relay connection and cleanup resources
+func (nrh *NostrRelayHandler) Close() {
+	nrh.cancel()
+	if nrh.relay != nil {
+		nrh.relay.Close()
+	}
+	close(nrh.eventChan)
+}
+
+// PublishEvent publishes a Nostr event to the relay
+func (nrh *NostrRelayHandler) PublishEvent(event *nostr.Event) error {
+	err := nrh.relay.Publish(nrh.ctx, *event)
+	if err != nil {
+		return fmt.Errorf("failed to publish event to relay: %v", err)
+	}
+
+	if nrh.verbose {
+		log.Printf("Published event %s to relay %s", event.ID, nrh.relayURL)
+	}
+
+	return nil
+}
+
+// SubscribeToEvents subscribes to events for a specific pubkey
+func (nrh *NostrRelayHandler) SubscribeToEvents(targetPubkey string) error {
+	// Create subscription filter
+	filter := nostr.Filter{
+		Kinds: []int{9999},                               // TCP proxy events
+		Tags:  nostr.TagMap{"p": []string{targetPubkey}}, // Events tagged for us
+	}
+
+	sub, err := nrh.relay.Subscribe(nrh.ctx, []nostr.Filter{filter})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to events: %v", err)
+	}
+
+	if nrh.verbose {
+		log.Printf("Subscribed to events for pubkey %s", targetPubkey)
+	}
+
+	// Start goroutine to handle incoming events
+	go func() {
+		for event := range sub.Events {
+			select {
+			case nrh.eventChan <- event:
+				if nrh.verbose {
+					log.Printf("Received event %s from relay", event.ID)
+				}
+			case <-nrh.ctx.Done():
+				return
+			default:
+				if nrh.verbose {
+					log.Printf("Event channel full, dropping event %s", event.ID)
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
+// GetEventChannel returns the channel for receiving events
+func (nrh *NostrRelayHandler) GetEventChannel() <-chan *nostr.Event {
+	return nrh.eventChan
+}
+
+// Helper functions for packet processing
+
+// ParseNostrEvent parses a Nostr event content to extract the packet
 func ParseNostrEvent(event *nostr.Event) (*Packet, error) {
 	// Verify event kind
 	if event.Kind != 9999 {
 		return nil, fmt.Errorf("invalid event kind: %d", event.Kind)
 	}
 
-	// Parse the JSON content as packet
-	packet, err := FromJSON([]byte(event.Content))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse packet from event content: %v", err)
+	var packet Packet
+	if err := json.Unmarshal([]byte(event.Content), &packet); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal packet: %v", err)
 	}
 
-	return packet, nil
+	return &packet, nil
 }
 
-// IsEventForMe checks if the event is tagged for this pubkey
+// IsEventForMe checks if an event is tagged for the current public key
 func IsEventForMe(event *nostr.Event, myPubkey string) bool {
 	for _, tag := range event.Tags {
 		if len(tag) >= 2 && tag[0] == "p" && tag[1] == myPubkey {
@@ -174,140 +259,4 @@ func IsEventForMe(event *nostr.Event, myPubkey string) bool {
 		}
 	}
 	return false
-}
-
-// GetEventFilename generates a filename for a Nostr event (using event ID)
-func GetEventFilename(event *nostr.Event, baseDir string) string {
-	return filepath.Join(baseDir, fmt.Sprintf("%s.json", event.ID))
-}
-
-// NostrEventHandler handles reading/writing Nostr events to disk
-type NostrEventHandler struct {
-	baseDir       string
-	keyMgr        *KeyManager
-	verbose       bool
-	cachedEvents  map[string]*nostr.Event // Cache for read events
-	lastCacheTime time.Time               // Last time cache was updated
-	cacheMutex    sync.RWMutex            // Protects cachedEvents map
-}
-
-// NewNostrEventHandler creates a new Nostr event handler
-func NewNostrEventHandler(baseDir string, keyMgr *KeyManager, verbose bool) *NostrEventHandler {
-	return &NostrEventHandler{
-		baseDir:      baseDir,
-		keyMgr:       keyMgr,
-		verbose:      verbose,
-		cachedEvents: make(map[string]*nostr.Event),
-	}
-}
-
-// WriteEvent writes a Nostr event to disk
-func (neh *NostrEventHandler) WriteEvent(event *nostr.Event) error {
-	filename := GetEventFilename(event, neh.baseDir)
-
-	// Ensure directory exists
-	if err := os.MkdirAll(neh.baseDir, 0755); err != nil {
-		return fmt.Errorf("failed to create events directory: %v", err)
-	}
-
-	// Serialize event to JSON
-	data, err := json.MarshalIndent(event, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal event: %v", err)
-	}
-
-	if err := os.WriteFile(filename, data, 0644); err != nil {
-		return fmt.Errorf("failed to write event file %s: %v", filename, err)
-	}
-
-	// Cache the written event
-	neh.cacheMutex.Lock()
-	neh.cachedEvents[filename] = event
-	neh.cacheMutex.Unlock()
-
-	if neh.verbose {
-		log.Printf("NostrEventHandler: Wrote event %s to %s", event.ID, filename)
-	}
-
-	return nil
-}
-
-// ReadEvent reads a Nostr event from disk with caching
-func (neh *NostrEventHandler) ReadEvent(filename string) (*nostr.Event, error) {
-	// Check cache first (read lock)
-	neh.cacheMutex.RLock()
-	if event, exists := neh.cachedEvents[filename]; exists {
-		neh.cacheMutex.RUnlock()
-		return event, nil
-	}
-	neh.cacheMutex.RUnlock()
-
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read event file %s: %v", filename, err)
-	}
-
-	var event nostr.Event
-	if err := json.Unmarshal(data, &event); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal event from %s: %v", filename, err)
-	}
-
-	// Cache the event (write lock)
-	neh.cacheMutex.Lock()
-	neh.cachedEvents[filename] = &event
-	neh.cacheMutex.Unlock()
-
-	if neh.verbose {
-		log.Printf("NostrEventHandler: Read event %s from %s", event.ID, filename)
-	}
-
-	return &event, nil
-}
-
-// GetEventFiles returns all event files in the directory for a specific pubkey
-func (neh *NostrEventHandler) GetEventFiles(targetPubkey string, startupTime time.Time) ([]string, error) {
-	var eventFiles []string
-
-	err := filepath.WalkDir(neh.baseDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if d.IsDir() || filepath.Ext(path) != ".json" {
-			return nil
-		}
-
-		// Read and check event
-		event, err := neh.ReadEvent(path)
-		if err != nil {
-			if neh.verbose {
-				log.Printf("NostrEventHandler: Warning: failed to read event file %s: %v", path, err)
-			}
-			return nil
-		}
-
-		// Check if event is for target pubkey
-		if !IsEventForMe(event, targetPubkey) {
-			return nil
-		}
-
-		// Check if event is newer than startup time (for filtering old events)
-		eventTime := time.Unix(int64(event.CreatedAt), 0)
-		if eventTime.Before(startupTime) {
-			if neh.verbose {
-				log.Printf("NostrEventHandler: Ignoring old event %s (created %v, startup %v)", event.ID, eventTime, startupTime)
-			}
-			return nil
-		}
-
-		eventFiles = append(eventFiles, path)
-		return nil
-	})
-
-	return eventFiles, err
-}
-
-// GetAllEventFiles returns all event files regardless of timestamp
-func (neh *NostrEventHandler) GetAllEventFiles(targetPubkey string) ([]string, error) {
-	return neh.GetEventFiles(targetPubkey, time.Unix(0, 0)) // Use epoch time to include all events
 }
