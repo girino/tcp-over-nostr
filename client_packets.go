@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -25,6 +26,23 @@ func runClientPackets(clientPort int, packetDir string, verbose bool) {
 	// Ensure packet directory exists
 	if err := os.MkdirAll(packetDir, 0755); err != nil {
 		log.Fatalf("Failed to create packet directory %s: %v", packetDir, err)
+	}
+
+	// Clean up any old packet files on startup
+	if verbose {
+		log.Printf("Client: Cleaning up old packet files on startup...")
+	}
+	pattern := filepath.Join(packetDir, "*.json")
+	matches, err := filepath.Glob(pattern)
+	if err == nil {
+		for _, filename := range matches {
+			if err := os.Remove(filename); err != nil && verbose {
+				log.Printf("Client: Warning: failed to remove old packet file %s: %v", filename, err)
+			}
+		}
+		if len(matches) > 0 && verbose {
+			log.Printf("Client: Cleaned up %d old packet files", len(matches))
+		}
 	}
 
 	// Start listening
@@ -69,11 +87,6 @@ func handleClientConnectionPackets(clientConn net.Conn, packetDir string, verbos
 
 	// Create packet handler
 	packetHandler := NewPacketHandler(packetDir, sessionID, verbose)
-	defer func() {
-		if err := packetHandler.CleanupSession(); err != nil && verbose {
-			log.Printf("Client: Warning: cleanup failed for session %s: %v", sessionID, err)
-		}
-	}()
 
 	// Send open packet
 	openPacket := CreateOpenPacket(sessionID, "client_to_server", "", 0, clientAddr)
@@ -87,13 +100,13 @@ func handleClientConnectionPackets(clientConn net.Conn, packetDir string, verbos
 	done := make(chan bool, 2)
 	var sequence uint64 = 1
 
-		// Start goroutine to read server responses and send to client
+	// Start goroutine to read server responses and send to client
 	go func() {
 		defer func() { done <- true }()
-		
+
 		processedSequences := make(map[uint64]bool)
 		var nextExpectedSequence uint64 = 1 // Server responses start from 1
-		
+
 		for {
 			// Get all server response packets for this session
 			files, err := packetHandler.GetPacketFiles("server_to_client")
@@ -104,10 +117,10 @@ func handleClientConnectionPackets(clientConn net.Conn, packetDir string, verbos
 				time.Sleep(50 * time.Millisecond)
 				continue
 			}
-			
+
 			processedAny := false
 			sessionClosed := false
-			
+
 			// Process packets in sequence order
 			for _, filename := range files {
 				packet, err := packetHandler.ReadPacket(filename)
@@ -117,12 +130,12 @@ func handleClientConnectionPackets(clientConn net.Conn, packetDir string, verbos
 					}
 					continue
 				}
-				
+
 				// Skip already processed packets
 				if processedSequences[packet.Sequence] {
 					continue
 				}
-				
+
 				// Process packets in sequence order (except heartbeats)
 				if packet.Type == PacketTypeHeartbeat || packet.Sequence == nextExpectedSequence {
 					switch packet.Type {
@@ -134,7 +147,7 @@ func handleClientConnectionPackets(clientConn net.Conn, packetDir string, verbos
 							}
 							continue
 						}
-						
+
 						if len(data) > 0 {
 							_, writeErr := clientConn.Write(data)
 							if verbose && writeErr == nil {
@@ -147,37 +160,37 @@ func handleClientConnectionPackets(clientConn net.Conn, packetDir string, verbos
 								return
 							}
 						}
-						
+
 					case PacketTypeClose:
 						if verbose {
 							log.Printf("Client: Session %s - Received close packet: %s", sessionID, packet.ErrorMsg)
 						}
 						sessionClosed = true
-						
+
 					case PacketTypeHeartbeat:
 						// Respond to heartbeat if needed
 						if verbose {
 							log.Printf("Client: Session %s - Received heartbeat", sessionID)
 						}
 					}
-					
+
 					processedSequences[packet.Sequence] = true
 					if packet.Type != PacketTypeHeartbeat {
 						nextExpectedSequence++
 					}
 					processedAny = true
-					
+
 					// Clean up processed packet file
 					if err := os.Remove(filename); err != nil && verbose {
 						log.Printf("Client: Warning: failed to remove processed packet file %s: %v", filename, err)
 					}
-					
+
 					if sessionClosed {
 						return
 					}
 				}
 			}
-			
+
 			if !processedAny {
 				time.Sleep(50 * time.Millisecond)
 			}

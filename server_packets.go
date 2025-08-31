@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -32,6 +31,23 @@ func runServerPackets(targetHost string, targetPort int, packetDir string, verbo
 		log.Fatalf("Failed to create packet directory %s: %v", packetDir, err)
 	}
 
+	// Clean up any old packet files on startup
+	if verbose {
+		log.Printf("Server: Cleaning up old packet files on startup...")
+	}
+	pattern := filepath.Join(packetDir, "*.json")
+	matches, err := filepath.Glob(pattern)
+	if err == nil {
+		for _, filename := range matches {
+			if err := os.Remove(filename); err != nil && verbose {
+				log.Printf("Server: Warning: failed to remove old packet file %s: %v", filename, err)
+			}
+		}
+		if len(matches) > 0 && verbose {
+			log.Printf("Server: Cleaned up %d old packet files", len(matches))
+		}
+	}
+
 	fmt.Printf("TCP proxy server started successfully. Monitoring for packets...\n\n")
 
 	// Monitor for new session open packets
@@ -41,9 +57,9 @@ func runServerPackets(targetHost string, targetPort int, packetDir string, verbo
 func monitorSessionPackets(packetDir, targetAddr string, verbose bool) {
 	processedSessions := make(map[string]bool)
 
-	for {
-		// Find open packets for new sessions
-		pattern := filepath.Join(packetDir, "*_client_to_server_*.json")
+		for {
+		// Find open packets for new sessions (only look at sequence 000000 for open packets)
+		pattern := filepath.Join(packetDir, "*_client_to_server_000000_*.json")
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			if verbose {
@@ -53,31 +69,30 @@ func monitorSessionPackets(packetDir, targetAddr string, verbose bool) {
 			continue
 		}
 
-				for _, filename := range matches {
-			// Extract session ID from filename
-			// Format: sessionID_direction_sequence_packetID.json
-			base := filepath.Base(filename)
-			// Remove .json extension
-			base = strings.TrimSuffix(base, ".json")
-			parts := strings.Split(base, "_")
-			
-			// Find where client_to_server starts to split properly
-			var sessionParts []string
-			for i, part := range parts {
-				if part == "client" && i+2 < len(parts) && parts[i+1] == "to" && parts[i+2] == "server" {
-					sessionParts = parts[:i]
-					break
-				}
-			}
-			
-			if len(sessionParts) == 0 {
+		for _, filename := range matches {
+			// Read the packet to verify it's an open packet
+			data, err := os.ReadFile(filename)
+			if err != nil {
 				if verbose {
-					log.Printf("Server: Could not extract session ID from %s", filename)
+					log.Printf("Server: Error reading potential open packet %s: %v", filename, err)
 				}
 				continue
 			}
 			
-			sessionID := strings.Join(sessionParts, "_")
+			packet, err := FromJSON(data)
+			if err != nil {
+				if verbose {
+					log.Printf("Server: Error parsing potential open packet %s: %v", filename, err)
+				}
+				continue
+			}
+			
+			// Only process if it's actually an open packet
+			if packet.Type != PacketTypeOpen {
+				continue
+			}
+			
+			sessionID := packet.SessionID
 			
 			if !processedSessions[sessionID] {
 				processedSessions[sessionID] = true
@@ -104,16 +119,12 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 	packetHandler := NewPacketHandler(packetDir, sessionID, verbose)
 
 	var targetConn net.Conn
-	var err error
 	var sequence uint64 = 1
 	sessionActive := true
 
 	defer func() {
 		if targetConn != nil {
 			targetConn.Close()
-		}
-		if err := packetHandler.CleanupSession(); err != nil && verbose {
-			log.Printf("Server: Warning: cleanup failed for session %s: %v", sessionID, err)
 		}
 	}()
 
@@ -171,13 +182,13 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 		}
 	}()
 
-		// Process client packets in order
+	// Process client packets in order
 	go func() {
 		defer func() { done <- true }()
-		
+
 		processedSequences := make(map[uint64]bool)
-		var nextExpectedSequence uint64 = 0
-		
+		var nextExpectedSequence uint64 = 1 // First data packet is sequence 1 (open is 0)
+
 		for sessionActive {
 			// Get all client packets for this session
 			files, err := packetHandler.GetPacketFiles("client_to_server")
@@ -188,9 +199,9 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 				time.Sleep(50 * time.Millisecond)
 				continue
 			}
-			
+
 			processedAny := false
-			
+
 			// Process packets in sequence order
 			for _, filename := range files {
 				packet, err := packetHandler.ReadPacket(filename)
@@ -200,12 +211,12 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 					}
 					continue
 				}
-				
+
 				// Skip already processed packets
 				if processedSequences[packet.Sequence] {
 					continue
 				}
-				
+
 				// For open packets, process immediately
 				if packet.Type == PacketTypeOpen {
 					// Connect to target server using packet metadata or default target
@@ -213,7 +224,7 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 					if packet.TargetHost != "" && packet.TargetPort != 0 {
 						connectAddr = fmt.Sprintf("%s:%d", packet.TargetHost, packet.TargetPort)
 					}
-					
+
 					targetConn, err = net.Dial("tcp", connectAddr)
 					if err != nil {
 						if verbose {
@@ -226,21 +237,21 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 						}
 						return
 					}
-					
+
 					if verbose {
 						log.Printf("Server: Session %s - Connected to target %s", sessionID, connectAddr)
 					}
-					
+
 					processedSequences[packet.Sequence] = true
 					processedAny = true
-					
+
 					// Clean up processed packet file
 					if err := os.Remove(filename); err != nil && verbose {
 						log.Printf("Server: Warning: failed to remove processed packet file %s: %v", filename, err)
 					}
 					continue
 				}
-				
+
 				// For other packets, process in sequence order
 				if packet.Sequence == nextExpectedSequence {
 					switch packet.Type {
@@ -251,7 +262,7 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 							}
 							continue
 						}
-						
+
 						data, err := packet.GetData()
 						if err != nil {
 							if verbose {
@@ -259,7 +270,7 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 							}
 							continue
 						}
-						
+
 						if len(data) > 0 {
 							_, writeErr := targetConn.Write(data)
 							if verbose && writeErr == nil {
@@ -272,19 +283,19 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 								return
 							}
 						}
-						
+
 					case PacketTypeClose:
 						if verbose {
 							log.Printf("Server: Session %s - Received close packet: %s", sessionID, packet.ErrorMsg)
 						}
 						sessionActive = false
-						
+
 						// Clean up processed packet file
 						if err := os.Remove(filename); err != nil && verbose {
 							log.Printf("Server: Warning: failed to remove processed packet file %s: %v", filename, err)
 						}
 						return
-						
+
 					case PacketTypeHeartbeat:
 						// Respond to heartbeat
 						heartbeatPacket := CreateHeartbeatPacket(sessionID, "server_to_client")
@@ -295,18 +306,18 @@ func handleServerSessionPackets(sessionID, packetDir, targetAddr string, verbose
 							log.Printf("Server: Session %s - Responded to heartbeat", sessionID)
 						}
 					}
-					
+
 					processedSequences[packet.Sequence] = true
 					nextExpectedSequence++
 					processedAny = true
-					
+
 					// Clean up processed packet file
 					if err := os.Remove(filename); err != nil && verbose {
 						log.Printf("Server: Warning: failed to remove processed packet file %s: %v", filename, err)
 					}
 				}
 			}
-			
+
 			if !processedAny {
 				time.Sleep(50 * time.Millisecond)
 			}
