@@ -111,7 +111,7 @@ func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string) (*no
 
 	// Create Nostr event
 	event := &nostr.Event{
-		Kind:      9999,               // Custom kind for TCP proxy packets
+		Kind:      20547,              // Ephemeral event for TCP proxy packets
 		Content:   string(packetJSON), // JSON packet as content
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags: nostr.Tags{
@@ -195,7 +195,7 @@ func (nrh *NostrRelayHandler) PublishEvent(event *nostr.Event) error {
 func (nrh *NostrRelayHandler) SubscribeToEvents(targetPubkey string) error {
 	// Create subscription filter
 	filter := nostr.Filter{
-		Kinds: []int{9999},                               // TCP proxy events
+		Kinds: []int{20547},                              // Ephemeral TCP proxy events
 		Tags:  nostr.TagMap{"p": []string{targetPubkey}}, // Events tagged for us
 	}
 
@@ -239,7 +239,7 @@ func (nrh *NostrRelayHandler) GetEventChannel() <-chan *nostr.Event {
 // ParseNostrEvent parses a Nostr event content to extract the packet
 func ParseNostrEvent(event *nostr.Event) (*Packet, error) {
 	// Verify event kind
-	if event.Kind != 9999 {
+	if event.Kind != 20547 {
 		return nil, fmt.Errorf("invalid event kind: %d", event.Kind)
 	}
 
