@@ -164,7 +164,7 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 	go readTargetNostrResponses(relayHandler, keyMgr, sessionID, clientPubkey, targetConn, targetDone, verbose)
 
 	processedSequences := make(map[uint64]bool)
-	nextExpectedSequence := uint64(1)          // Start at 1 since open packet (seq 0) was already handled
+	nextExpectedSequence := uint64(1)                // Start at 1 since open packet (seq 0) was already handled
 	pendingPackets := make(map[uint64]*ParsedPacket) // Buffer for out-of-order packets
 
 	// Mark the open packet (seq 0) as already processed
@@ -291,5 +291,3 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 		log.Printf("Server: Session %s - Sent close packet to client", sessionID)
 	}
 }
-
-

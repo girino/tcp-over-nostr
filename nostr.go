@@ -112,12 +112,12 @@ func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string, pack
 
 	// Create tags with all metadata
 	tags := nostr.Tags{
-		{"p", targetPubkey},           // Tag the target (server or client)
-		{"proxy", "tcp"},              // Identify as TCP proxy traffic
-		{"type", string(packetType)},  // Packet type (open, data, close, etc.)
-		{"session", sessionID},        // Session identifier
+		{"p", targetPubkey},                       // Tag the target (server or client)
+		{"proxy", "tcp"},                          // Identify as TCP proxy traffic
+		{"type", string(packetType)},              // Packet type (open, data, close, etc.)
+		{"session", sessionID},                    // Session identifier
 		{"sequence", fmt.Sprintf("%d", sequence)}, // Sequence number
-		{"direction", direction},      // Direction (client_to_server, server_to_client)
+		{"direction", direction},                  // Direction (client_to_server, server_to_client)
 	}
 
 	// Add optional tags based on packet type
@@ -136,8 +136,8 @@ func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string, pack
 
 	// Create Nostr event
 	event := &nostr.Event{
-		Kind:      20547,              // Ephemeral event for TCP proxy packets
-		Content:   content,            // Base64 encoded raw data only
+		Kind:      20547,   // Ephemeral event for TCP proxy packets
+		Content:   content, // Base64 encoded raw data only
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags:      tags,
 	}
@@ -313,7 +313,7 @@ func ParseNostrEvent(event *nostr.Event) (*ParsedPacket, error) {
 	parsed.Type = PacketType(getTagValue("type"))
 	parsed.SessionID = getTagValue("session")
 	parsed.Direction = getTagValue("direction")
-	
+
 	// Parse sequence number
 	if seqStr := getTagValue("sequence"); seqStr != "" {
 		if _, err := fmt.Sscanf(seqStr, "%d", &parsed.Sequence); err != nil {
@@ -325,7 +325,7 @@ func ParseNostrEvent(event *nostr.Event) (*ParsedPacket, error) {
 	parsed.TargetHost = getTagValue("target_host")
 	parsed.ClientAddr = getTagValue("client_addr")
 	parsed.ErrorMsg = getTagValue("error")
-	
+
 	// Parse target port
 	if portStr := getTagValue("target_port"); portStr != "" {
 		if _, err := fmt.Sscanf(portStr, "%d", &parsed.TargetPort); err != nil {
