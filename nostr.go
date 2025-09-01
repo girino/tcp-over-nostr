@@ -252,6 +252,44 @@ func (nrh *NostrRelayHandler) SubscribeToEvents(targetPubkey string) error {
 	return nil
 }
 
+// SubscribeToGiftWrapEvents subscribes to encrypted gift wrap events for a specific pubkey
+func (nrh *NostrRelayHandler) SubscribeToGiftWrapEvents(targetPubkey string) error {
+	// Create subscription filter for gift wrap events
+	filter := nostr.Filter{
+		Kinds: []int{21059},                              // Ephemeral gift wrap events
+		Tags:  nostr.TagMap{"p": []string{targetPubkey}}, // Events tagged for us
+	}
+
+	sub, err := nrh.relay.Subscribe(nrh.ctx, []nostr.Filter{filter})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to gift wrap events: %v", err)
+	}
+
+	if nrh.verbose {
+		log.Printf("Subscribed to encrypted gift wrap events for pubkey %s", targetPubkey)
+	}
+
+	// Start goroutine to handle incoming events
+	go func() {
+		for event := range sub.Events {
+			select {
+			case nrh.eventChan <- event:
+				if nrh.verbose {
+					log.Printf("Received encrypted gift wrap event %s from relay", event.ID)
+				}
+			case <-nrh.ctx.Done():
+				return
+			default:
+				if nrh.verbose {
+					log.Printf("Event channel full, dropping gift wrap event %s", event.ID)
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
 // GetEventChannel returns the channel for receiving events
 func (nrh *NostrRelayHandler) GetEventChannel() <-chan *nostr.Event {
 	return nrh.eventChan
@@ -266,15 +304,16 @@ func (nrh *NostrRelayHandler) GetRelayURL() string {
 
 // ParsedPacket represents a packet with metadata extracted from Nostr event tags
 type ParsedPacket struct {
-	Packet     *Packet
-	Type       PacketType
-	SessionID  string
-	Sequence   uint64
-	Direction  string
-	TargetHost string
-	TargetPort int
-	ClientAddr string
-	ErrorMsg   string
+	Packet       *Packet
+	Type         PacketType
+	SessionID    string
+	Sequence     uint64
+	Direction    string
+	TargetHost   string
+	TargetPort   int
+	ClientAddr   string
+	ErrorMsg     string
+	ClientPubkey string // Real client pubkey from the rumor
 }
 
 // ParseNostrEvent parses a Nostr event to extract packet data and metadata from tags
@@ -462,29 +501,29 @@ func (km *KeyManager) createEphemeralSeal(rumor *nostr.Event, targetPubkey strin
 
 // createEphemeralGiftWrap creates an ephemeral gift wrap (kind 21059) with encrypted seal
 func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey string) (*nostr.Event, error) {
+	// Generate a random one-time-use keypair for the gift wrap FIRST
+	oneTimePrivKey := nostr.GeneratePrivateKey()
+	oneTimePubKey, err := nostr.GetPublicKey(oneTimePrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive one-time public key: %v", err)
+	}
+
 	// Serialize seal to JSON
 	sealJSON, err := json.Marshal(seal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize seal: %v", err)
 	}
 
-	// Generate conversation key for encryption
-	conversationKey, err := nip44.GenerateConversationKey(targetPubkey, km.keys.PrivateKey)
+	// Generate conversation key between one-time key and target (NOT sender and target)
+	conversationKey, err := nip44.GenerateConversationKey(targetPubkey, oneTimePrivKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
 	}
 
-	// Encrypt seal using NIP-44
+	// Encrypt seal using NIP-44 with one-time key conversation
 	encryptedSeal, err := nip44.Encrypt(string(sealJSON), conversationKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt seal: %v", err)
-	}
-
-	// Generate a random one-time-use keypair for the gift wrap
-	oneTimePrivKey := nostr.GeneratePrivateKey()
-	oneTimePubKey, err := nostr.GetPublicKey(oneTimePrivKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive one-time public key: %v", err)
 	}
 
 	// Create ephemeral gift wrap event (kind 21059 - ephemeral version of kind 1059)
@@ -508,7 +547,7 @@ func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey st
 
 // UnwrapEphemeralGiftWrap unwraps an ephemeral gift wrapped event
 func (km *KeyManager) UnwrapEphemeralGiftWrap(giftWrap *nostr.Event) (*ParsedPacket, error) {
-	// Generate conversation key for decryption
+	// Generate conversation key for decryption (recipient's private key + one-time public key)
 	conversationKey, err := nip44.GenerateConversationKey(giftWrap.PubKey, km.keys.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
@@ -574,7 +613,10 @@ func (km *KeyManager) parseRumorAsPacket(rumor *nostr.Event) (*ParsedPacket, err
 	packet := &Packet{Data: data}
 
 	// Extract metadata from tags
-	parsed := &ParsedPacket{Packet: packet}
+	parsed := &ParsedPacket{
+		Packet:       packet,
+		ClientPubkey: rumor.PubKey, // Extract real client pubkey from rumor
+	}
 
 	// Helper function to get tag value
 	getTagValue := func(tagName string) string {

@@ -42,9 +42,9 @@ func runServerNostr(targetHost string, targetPort int, relayURL, keysFile string
 	}
 	defer relayHandler.Close()
 
-	// Subscribe to events for this server
-	if err := relayHandler.SubscribeToEvents(serverKeys.PublicKey); err != nil {
-		log.Fatalf("Failed to subscribe to events: %v", err)
+	// Subscribe to encrypted gift wrap events for this server
+	if err := relayHandler.SubscribeToGiftWrapEvents(serverKeys.PublicKey); err != nil {
+		log.Fatalf("Failed to subscribe to encrypted events: %v", err)
 	}
 
 	fmt.Printf("TCP proxy server started successfully. Monitoring for Nostr events...\n\n")
@@ -65,11 +65,11 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 				continue
 			}
 
-			// Parse packet from event
-			parsedPacket, err := ParseNostrEvent(event)
+			// Parse encrypted gift wrapped event
+			parsedPacket, err := keyMgr.UnwrapEphemeralGiftWrap(event)
 			if err != nil {
 				if verbose {
-					log.Printf("Server: Error parsing packet from event: %v", err)
+					log.Printf("Server: Error unwrapping encrypted event: %v", err)
 				}
 				continue
 			}
@@ -95,9 +95,10 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 				sessionEventChans[parsedPacket.SessionID] = sessionEventChan
 
 				// Start new session handler with its own event channel
+				// Use the real client pubkey from the rumor, not the one-time pubkey from gift wrap
 				done := make(chan bool)
 				activeSessions[parsedPacket.SessionID] = done
-				go handleServerNostrSessionWithEvents(keyMgr, parsedPacket.SessionID, event.PubKey, targetAddr, relayHandler.GetRelayURL(), sessionEventChan, done, verbose)
+				go handleServerNostrSessionWithEvents(keyMgr, parsedPacket.SessionID, parsedPacket.ClientPubkey, targetAddr, relayHandler.GetRelayURL(), sessionEventChan, done, verbose)
 
 				// Clean up when session is done
 				go func(sessionID string, doneChan chan bool) {
@@ -180,10 +181,10 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 			return
 		case event := <-eventChan:
 			// Events from this channel are already filtered for this session
-			parsedPacket, err := ParseNostrEvent(event)
+			parsedPacket, err := keyMgr.UnwrapEphemeralGiftWrap(event)
 			if err != nil {
 				if verbose {
-					log.Printf("Server: Session %s - Error parsing packet: %v", sessionID, err)
+					log.Printf("Server: Session %s - Error unwrapping encrypted packet: %v", sessionID, err)
 				}
 				continue
 			}
@@ -270,12 +271,12 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 			// Create data packet
 			dataPacket := CreateDataPacket(buffer[:n])
 			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, clientPubkey, PacketTypeData, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
-				log.Printf("Server: Session %s - Failed to send data packet: %v", sessionID, err)
+				log.Printf("Server: Session %s - Failed to send encrypted data packet: %v", sessionID, err)
 				break
 			}
 
 			if verbose {
-				log.Printf("Server: Session %s - Sent %d bytes to client via event (seq %d)", sessionID, n, sequence)
+				log.Printf("Server: Session %s - Sent %d bytes to client via encrypted event (seq %d)", sessionID, n, sequence)
 			}
 			sequence++
 		}
@@ -284,10 +285,10 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 	// Send close packet
 	closePacket := CreateEmptyPacket()
 	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, clientPubkey, PacketTypeClose, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
-		log.Printf("Server: Session %s - Failed to send close packet: %v", sessionID, err)
+		log.Printf("Server: Session %s - Failed to send encrypted close packet: %v", sessionID, err)
 	}
 
 	if verbose {
-		log.Printf("Server: Session %s - Sent close packet to client", sessionID)
+		log.Printf("Server: Session %s - Sent encrypted close packet to client", sessionID)
 	}
 }
