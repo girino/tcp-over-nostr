@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func runClientNostr(clientPort int, relayURL, serverPubkey, keysFile string, verbose bool) {
+func runClientNostr(clientPort int, relayURLs []string, serverPubkey, keysFile string, verbose bool) {
 	// Show startup banner
 	fmt.Print(GetBanner())
 
@@ -25,7 +25,7 @@ func runClientNostr(clientPort int, relayURL, serverPubkey, keysFile string, ver
 	fmt.Printf("Starting TCP proxy client (Nostr mode):\n")
 	fmt.Printf("  Listen port: %d\n", clientPort)
 	fmt.Printf("  Server pubkey: %s\n", serverPubkey)
-	fmt.Printf("  Relay URL: %s\n", relayURL)
+	fmt.Printf("  Relay URLs: %v\n", relayURLs)
 	fmt.Printf("  Keys file: %s\n", keysFile)
 	fmt.Printf("  Verbose logging: %t\n\n", verbose)
 
@@ -39,9 +39,9 @@ func runClientNostr(clientPort int, relayURL, serverPubkey, keysFile string, ver
 	fmt.Printf("Client Nostr pubkey: %s\n\n", clientKeys.PublicKey)
 
 	// Initialize relay handler
-	relayHandler, err := NewNostrRelayHandler(relayURL, keyMgr, verbose)
+	relayHandler, err := NewNostrRelayHandler(relayURLs, keyMgr, verbose)
 	if err != nil {
-		log.Fatalf("Failed to connect to relay: %v", err)
+		log.Fatalf("Failed to connect to relays: %v", err)
 	}
 	defer relayHandler.Close()
 

@@ -19,7 +19,7 @@ func main() {
 	var targetPort = flag.Int("target-port", 80, "Target port to proxy to")
 
 	// Nostr flags
-	var relay = flag.String("relay", "ws://localhost:10547", "Nostr relay URL for event communication")
+	var relay = flag.String("relay", "ws://localhost:10547", "Nostr relay URL for event communication (can specify multiple with -relay flag)")
 	var serverKey = flag.String("server-key", "", "Server's Nostr public key (required for client)")
 	var keysFile = flag.String("keys-file", "", "File to store Nostr key pair (default: client-keys.json or server-keys.json)")
 
@@ -27,6 +27,19 @@ func main() {
 	var version = flag.Bool("version", false, "Show version information")
 
 	flag.Parse()
+
+	// Collect all relay URLs (can be specified multiple times with -relay flag)
+	var relayURLs []string
+	for i, arg := range os.Args {
+		if arg == "-relay" && i+1 < len(os.Args) {
+			relayURLs = append(relayURLs, os.Args[i+1])
+		}
+	}
+
+	// If no relays specified via -relay flags, use the default
+	if len(relayURLs) == 0 {
+		relayURLs = []string{*relay}
+	}
 
 	if *version {
 		fmt.Printf("%s\n", GetFullVersionInfo())
@@ -46,14 +59,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -client-port int     Port for client to listen on (default 8080)\n")
 		fmt.Fprintf(os.Stderr, "  -server-key string   Server's Nostr public key (required)\n")
 		fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"client-keys.json\")\n")
-		fmt.Fprintf(os.Stderr, "  -relay string        Nostr relay URL (default \"ws://localhost:10547\")\n")
+		fmt.Fprintf(os.Stderr, "  -relay string        Nostr relay URL (can specify multiple times, default \"ws://localhost:10547\")\n")
 		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n")
 		fmt.Fprintf(os.Stderr, "  -version            Show version information\n\n")
 		fmt.Fprintf(os.Stderr, "Server mode options:\n")
 		fmt.Fprintf(os.Stderr, "  -target-host string  Target host to proxy to (default \"localhost\")\n")
 		fmt.Fprintf(os.Stderr, "  -target-port int     Target port to proxy to (default 80)\n")
 		fmt.Fprintf(os.Stderr, "  -keys-file string    File to store Nostr key pair (default \"server-keys.json\")\n")
-		fmt.Fprintf(os.Stderr, "  -relay string        Nostr relay URL (default \"ws://localhost:10547\")\n")
+		fmt.Fprintf(os.Stderr, "  -relay string        Nostr relay URL (can specify multiple times, default \"ws://localhost:10547\")\n")
 		fmt.Fprintf(os.Stderr, "  -verbose            Enable verbose logging\n")
 		fmt.Fprintf(os.Stderr, "  -version            Show version information\n\n")
 		fmt.Fprintf(os.Stderr, "Examples:\n")
@@ -87,9 +100,9 @@ func main() {
 
 	switch *mode {
 	case "client":
-		runClientNostr(*clientPort, *relay, *serverKey, *keysFile, *verbose)
+		runClientNostr(*clientPort, relayURLs, *serverKey, *keysFile, *verbose)
 	case "server":
-		runServerNostr(*targetHost, *targetPort, *relay, *keysFile, *verbose)
+		runServerNostr(*targetHost, *targetPort, relayURLs, *keysFile, *verbose)
 	default:
 		log.Fatalf("Invalid mode '%s'. Must be 'client' or 'server'", *mode)
 	}

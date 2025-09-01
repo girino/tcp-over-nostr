@@ -8,7 +8,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-func runServerNostr(targetHost string, targetPort int, relayURL, keysFile string, verbose bool) {
+func runServerNostr(targetHost string, targetPort int, relayURLs []string, keysFile string, verbose bool) {
 	// Show startup banner
 	fmt.Print(GetBanner())
 
@@ -21,7 +21,7 @@ func runServerNostr(targetHost string, targetPort int, relayURL, keysFile string
 
 	fmt.Printf("Starting TCP proxy server (Nostr mode):\n")
 	fmt.Printf("  Target: %s\n", targetAddr)
-	fmt.Printf("  Relay URL: %s\n", relayURL)
+	fmt.Printf("  Relay URLs: %v\n", relayURLs)
 	fmt.Printf("  Keys file: %s\n", keysFile)
 	fmt.Printf("  Verbose logging: %t\n\n", verbose)
 
@@ -36,9 +36,9 @@ func runServerNostr(targetHost string, targetPort int, relayURL, keysFile string
 	fmt.Printf("Share this pubkey with clients using -server-key parameter\n\n")
 
 	// Initialize relay handler
-	relayHandler, err := NewNostrRelayHandler(relayURL, keyMgr, verbose)
+	relayHandler, err := NewNostrRelayHandler(relayURLs, keyMgr, verbose)
 	if err != nil {
-		log.Fatalf("Failed to connect to relay: %v", err)
+		log.Fatalf("Failed to connect to relays: %v", err)
 	}
 	defer relayHandler.Close()
 
@@ -98,7 +98,7 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 				// Use the real client pubkey from the rumor, not the one-time pubkey from gift wrap
 				done := make(chan bool)
 				activeSessions[parsedPacket.SessionID] = done
-				go handleServerNostrSessionWithEvents(keyMgr, parsedPacket.SessionID, parsedPacket.ClientPubkey, targetAddr, relayHandler.GetRelayURL(), sessionEventChan, done, verbose)
+				go handleServerNostrSessionWithEvents(keyMgr, parsedPacket.SessionID, parsedPacket.ClientPubkey, targetAddr, relayHandler.GetRelayURLs(), sessionEventChan, done, verbose)
 
 				// Clean up when session is done
 				go func(sessionID string, doneChan chan bool) {
@@ -133,7 +133,7 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 	}
 }
 
-func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPubkey, targetAddr, relayURL string, eventChan <-chan *nostr.Event, done chan bool, verbose bool) {
+func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPubkey, targetAddr string, relayURLs []string, eventChan <-chan *nostr.Event, done chan bool, verbose bool) {
 	defer func() { done <- true }()
 
 	if verbose {
@@ -153,7 +153,7 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 	}
 
 	// Create relay handler for this session's responses
-	relayHandler, err := NewNostrRelayHandler(relayURL, keyMgr, verbose)
+	relayHandler, err := NewNostrRelayHandler(relayURLs, keyMgr, verbose)
 	if err != nil {
 		log.Printf("Server: Session %s - Failed to create relay handler: %v", sessionID, err)
 		return
