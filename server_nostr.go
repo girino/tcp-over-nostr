@@ -66,7 +66,7 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 			}
 
 			// Parse packet from event
-			packet, err := ParseNostrEvent(event)
+			parsedPacket, err := ParseNostrEvent(event)
 			if err != nil {
 				if verbose {
 					log.Printf("Server: Error parsing packet from event: %v", err)
@@ -75,29 +75,29 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 			}
 
 			// Only handle client_to_server packets
-			if packet.Direction != "client_to_server" {
+			if parsedPacket.Direction != "client_to_server" {
 				continue
 			}
 
 			// Check if this is an open packet for a new session
-			if packet.Type == PacketTypeOpen {
+			if parsedPacket.Type == PacketTypeOpen {
 				// Check if we already have this session
-				if _, exists := activeSessions[packet.SessionID]; exists {
+				if _, exists := activeSessions[parsedPacket.SessionID]; exists {
 					continue // Session already active
 				}
 
 				if verbose {
-					log.Printf("Server: New session %s from client", packet.SessionID)
+					log.Printf("Server: New session %s from client", parsedPacket.SessionID)
 				}
 
 				// Create session-specific event channel
 				sessionEventChan := make(chan *nostr.Event, 100)
-				sessionEventChans[packet.SessionID] = sessionEventChan
+				sessionEventChans[parsedPacket.SessionID] = sessionEventChan
 
 				// Start new session handler with its own event channel
 				done := make(chan bool)
-				activeSessions[packet.SessionID] = done
-				go handleServerNostrSessionWithEvents(keyMgr, packet.SessionID, event.PubKey, targetAddr, relayHandler.GetRelayURL(), sessionEventChan, done, verbose)
+				activeSessions[parsedPacket.SessionID] = done
+				go handleServerNostrSessionWithEvents(keyMgr, parsedPacket.SessionID, event.PubKey, targetAddr, relayHandler.GetRelayURL(), sessionEventChan, done, verbose)
 
 				// Clean up when session is done
 				go func(sessionID string, doneChan chan bool) {
@@ -110,21 +110,21 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 					if verbose {
 						log.Printf("Server: Session %s completed and cleaned up", sessionID)
 					}
-				}(packet.SessionID, done)
+				}(parsedPacket.SessionID, done)
 			} else {
 				// This is a data/close packet for an existing session
-				if sessionEventChan, exists := sessionEventChans[packet.SessionID]; exists {
+				if sessionEventChan, exists := sessionEventChans[parsedPacket.SessionID]; exists {
 					select {
 					case sessionEventChan <- event:
 						// Successfully forwarded to session handler
 					default:
 						if verbose {
-							log.Printf("Server: Session %s event channel full, dropping event", packet.SessionID)
+							log.Printf("Server: Session %s event channel full, dropping event", parsedPacket.SessionID)
 						}
 					}
 				} else {
 					if verbose {
-						log.Printf("Server: Received event for unknown session %s", packet.SessionID)
+						log.Printf("Server: Received event for unknown session %s", parsedPacket.SessionID)
 					}
 				}
 			}
@@ -165,7 +165,7 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 
 	processedSequences := make(map[uint64]bool)
 	nextExpectedSequence := uint64(1)          // Start at 1 since open packet (seq 0) was already handled
-	pendingPackets := make(map[uint64]*Packet) // Buffer for out-of-order packets
+	pendingPackets := make(map[uint64]*ParsedPacket) // Buffer for out-of-order packets
 
 	// Mark the open packet (seq 0) as already processed
 	processedSequences[0] = true
@@ -180,7 +180,7 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 			return
 		case event := <-eventChan:
 			// Events from this channel are already filtered for this session
-			packet, err := ParseNostrEvent(event)
+			parsedPacket, err := ParseNostrEvent(event)
 			if err != nil {
 				if verbose {
 					log.Printf("Server: Session %s - Error parsing packet: %v", sessionID, err)
@@ -189,21 +189,21 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 			}
 
 			// Skip if already processed
-			if processedSequences[packet.Sequence] {
+			if processedSequences[parsedPacket.Sequence] {
 				continue
 			}
 
 			// Check sequence order - if not the next expected, buffer it
-			if packet.Sequence != nextExpectedSequence {
-				pendingPackets[packet.Sequence] = packet
+			if parsedPacket.Sequence != nextExpectedSequence {
+				pendingPackets[parsedPacket.Sequence] = parsedPacket
 				if verbose {
-					log.Printf("Server: Session %s - Buffering out-of-order packet seq %d (expecting %d)", sessionID, packet.Sequence, nextExpectedSequence)
+					log.Printf("Server: Session %s - Buffering out-of-order packet seq %d (expecting %d)", sessionID, parsedPacket.Sequence, nextExpectedSequence)
 				}
 				continue
 			}
 
 			// Process this packet and any consecutive buffered packets
-			packetsToProcess := []*Packet{packet}
+			packetsToProcess := []*ParsedPacket{parsedPacket}
 
 			// Collect consecutive packets from buffer
 			seq := nextExpectedSequence + 1
@@ -226,20 +226,14 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 				switch pkt.Type {
 				case PacketTypeData:
 					// Write data to target connection
-					if len(pkt.Data) > 0 {
-						data, err := pkt.GetData()
-						if err != nil {
-							log.Printf("Server: Session %s - Error decoding packet data: %v", sessionID, err)
-							continue
-						}
-
-						if _, writeErr := targetConn.Write(data); writeErr != nil {
+					if len(pkt.Packet.Data) > 0 {
+						if _, writeErr := targetConn.Write(pkt.Packet.Data); writeErr != nil {
 							log.Printf("Server: Session %s - Error writing to target: %v", sessionID, writeErr)
 							return
 						}
 
 						if verbose {
-							log.Printf("Server: Session %s - Forwarded %d bytes to target (seq %d)", sessionID, len(data), pkt.Sequence)
+							log.Printf("Server: Session %s - Forwarded %d bytes to target (seq %d)", sessionID, len(pkt.Packet.Data), pkt.Sequence)
 						}
 					}
 
@@ -274,8 +268,8 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 
 		if n > 0 {
 			// Create data packet
-			dataPacket := CreateDataPacket(sessionID, "server_to_client", sequence, buffer[:n])
-			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, clientPubkey, verbose); err != nil {
+			dataPacket := CreateDataPacket(buffer[:n])
+			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, clientPubkey, PacketTypeData, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
 				log.Printf("Server: Session %s - Failed to send data packet: %v", sessionID, err)
 				break
 			}
@@ -288,8 +282,8 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 	}
 
 	// Send close packet
-	closePacket := CreateClosePacket(sessionID, "server_to_client", sequence, "")
-	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, clientPubkey, verbose); err != nil {
+	closePacket := CreateEmptyPacket()
+	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, clientPubkey, PacketTypeClose, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
 		log.Printf("Server: Session %s - Failed to send close packet: %v", sessionID, err)
 	}
 
@@ -297,3 +291,5 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 		log.Printf("Server: Session %s - Sent close packet to client", sessionID)
 	}
 }
+
+

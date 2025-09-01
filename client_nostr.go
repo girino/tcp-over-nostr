@@ -97,8 +97,8 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 	}
 
 	// Send open packet
-	openPacket := CreateOpenPacket(sessionID, "client_to_server", "", 0, clientAddr)
-	if err := sendNostrPacket(relayHandler, keyMgr, openPacket, serverPubkey, verbose); err != nil {
+	openPacket := CreateEmptyPacket()
+	if err := sendNostrPacket(relayHandler, keyMgr, openPacket, serverPubkey, PacketTypeOpen, sessionID, 0, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
 		log.Printf("Client: Failed to send open packet: %v", err)
 		return
 	}
@@ -124,8 +124,8 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 
 		if n > 0 {
 			// Create data packet
-			dataPacket := CreateDataPacket(sessionID, "client_to_server", sequence, buffer[:n])
-			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, serverPubkey, verbose); err != nil {
+			dataPacket := CreateDataPacket(buffer[:n])
+			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, serverPubkey, PacketTypeData, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
 				log.Printf("Client: Failed to send data packet: %v", err)
 				break
 			}
@@ -138,8 +138,8 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 	}
 
 	// Send close packet
-	closePacket := CreateClosePacket(sessionID, "client_to_server", sequence, "")
-	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, serverPubkey, verbose); err != nil {
+	closePacket := CreateEmptyPacket()
+	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, serverPubkey, PacketTypeClose, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
 		log.Printf("Client: Failed to send close packet: %v", err)
 	}
 
@@ -154,7 +154,7 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, sessionID, client
 
 	processedSequences := make(map[uint64]bool)
 	nextExpectedSequence := uint64(0)
-	pendingPackets := make(map[uint64]*Packet) // Buffer for out-of-order packets
+	pendingPackets := make(map[uint64]*ParsedPacket) // Buffer for out-of-order packets
 
 	for {
 		select {
@@ -167,7 +167,7 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, sessionID, client
 			}
 
 			// Parse packet from event
-			packet, err := ParseNostrEvent(event)
+			parsedPacket, err := ParseNostrEvent(event)
 			if err != nil {
 				if verbose {
 					log.Printf("Client: Error parsing packet from event: %v", err)
@@ -176,31 +176,31 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, sessionID, client
 			}
 
 			// Check if this packet belongs to our session
-			if packet.SessionID != sessionID {
+			if parsedPacket.SessionID != sessionID {
 				continue
 			}
 
 			// Check direction - we want server_to_client packets
-			if packet.Direction != "server_to_client" {
+			if parsedPacket.Direction != "server_to_client" {
 				continue
 			}
 
 			// Skip if already processed
-			if processedSequences[packet.Sequence] {
+			if processedSequences[parsedPacket.Sequence] {
 				continue
 			}
 
 			// Check sequence order - if not the next expected, buffer it
-			if packet.Sequence != nextExpectedSequence {
-				pendingPackets[packet.Sequence] = packet
+			if parsedPacket.Sequence != nextExpectedSequence {
+				pendingPackets[parsedPacket.Sequence] = parsedPacket
 				if verbose {
-					log.Printf("Client: Session %s - Buffering out-of-order packet seq %d (expecting %d)", sessionID, packet.Sequence, nextExpectedSequence)
+					log.Printf("Client: Session %s - Buffering out-of-order packet seq %d (expecting %d)", sessionID, parsedPacket.Sequence, nextExpectedSequence)
 				}
 				continue
 			}
 
 			// Process this packet and any consecutive buffered packets
-			packetsToProcess := []*Packet{packet}
+			packetsToProcess := []*ParsedPacket{parsedPacket}
 
 			// Collect consecutive packets from buffer
 			seq := nextExpectedSequence + 1
@@ -223,20 +223,14 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, sessionID, client
 				switch pkt.Type {
 				case PacketTypeData:
 					// Write data to client connection
-					if len(pkt.Data) > 0 {
-						data, err := pkt.GetData()
-						if err != nil {
-							log.Printf("Client: Session %s - Error decoding packet data: %v", sessionID, err)
-							continue
-						}
-
-						if _, writeErr := conn.Write(data); writeErr != nil {
+					if len(pkt.Packet.Data) > 0 {
+						if _, writeErr := conn.Write(pkt.Packet.Data); writeErr != nil {
 							log.Printf("Client: Session %s - Error writing to connection: %v", sessionID, writeErr)
 							return
 						}
 
 						if verbose {
-							log.Printf("Client: Session %s - Received %d bytes from server (seq %d)", sessionID, len(data), pkt.Sequence)
+							log.Printf("Client: Session %s - Received %d bytes from server (seq %d)", sessionID, len(pkt.Packet.Data), pkt.Sequence)
 						}
 					}
 
@@ -254,9 +248,9 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, sessionID, client
 	}
 }
 
-func sendNostrPacket(relayHandler *NostrRelayHandler, keyMgr *KeyManager, packet *Packet, targetPubkey string, verbose bool) error {
+func sendNostrPacket(relayHandler *NostrRelayHandler, keyMgr *KeyManager, packet *Packet, targetPubkey string, packetType PacketType, sessionID string, sequence uint64, direction string, targetHost string, targetPort int, clientAddr string, errorMsg string, verbose bool) error {
 	// Create Nostr event for the packet
-	event, err := keyMgr.CreateNostrEvent(packet, targetPubkey)
+	event, err := keyMgr.CreateNostrEvent(packet, targetPubkey, packetType, sessionID, sequence, direction, targetHost, targetPort, clientAddr, errorMsg)
 	if err != nil {
 		return fmt.Errorf("failed to create Nostr event: %v", err)
 	}
@@ -267,7 +261,7 @@ func sendNostrPacket(relayHandler *NostrRelayHandler, keyMgr *KeyManager, packet
 	}
 
 	if verbose {
-		log.Printf("Nostr: Sent packet %s as event %s", packet.ID, event.ID)
+		log.Printf("Nostr: Sent packet (type=%s, session=%s, seq=%d) as event %s", packetType, sessionID, sequence, event.ID)
 	}
 
 	return nil

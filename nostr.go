@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -97,27 +98,48 @@ func (km *KeyManager) GetKeys() *NostrKeys {
 	return km.keys
 }
 
-// CreateNostrEvent creates a Nostr event for a packet
-func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string) (*nostr.Event, error) {
+// CreateNostrEvent creates a Nostr event for a packet with metadata in tags
+func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string, packetType PacketType, sessionID string, sequence uint64, direction string, targetHost string, targetPort int, clientAddr string, errorMsg string) (*nostr.Event, error) {
 	if km.keys == nil {
 		return nil, fmt.Errorf("keys not loaded")
 	}
 
-	// Serialize packet to JSON
-	packetJSON, err := packet.ToJSON()
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize packet: %v", err)
+	// Encode packet data as base64 for content
+	var content string
+	if len(packet.Data) > 0 {
+		content = base64.StdEncoding.EncodeToString(packet.Data)
+	}
+
+	// Create tags with all metadata
+	tags := nostr.Tags{
+		{"p", targetPubkey},           // Tag the target (server or client)
+		{"proxy", "tcp"},              // Identify as TCP proxy traffic
+		{"type", string(packetType)},  // Packet type (open, data, close, etc.)
+		{"session", sessionID},        // Session identifier
+		{"sequence", fmt.Sprintf("%d", sequence)}, // Sequence number
+		{"direction", direction},      // Direction (client_to_server, server_to_client)
+	}
+
+	// Add optional tags based on packet type
+	if targetHost != "" {
+		tags = append(tags, nostr.Tag{"target_host", targetHost})
+	}
+	if targetPort > 0 {
+		tags = append(tags, nostr.Tag{"target_port", fmt.Sprintf("%d", targetPort)})
+	}
+	if clientAddr != "" {
+		tags = append(tags, nostr.Tag{"client_addr", clientAddr})
+	}
+	if errorMsg != "" {
+		tags = append(tags, nostr.Tag{"error", errorMsg})
 	}
 
 	// Create Nostr event
 	event := &nostr.Event{
 		Kind:      20547,              // Ephemeral event for TCP proxy packets
-		Content:   string(packetJSON), // JSON packet as content
+		Content:   content,            // Base64 encoded raw data only
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
-		Tags: nostr.Tags{
-			{"p", targetPubkey}, // Tag the target (server or client)
-			{"proxy", "tcp"},    // Identify as TCP proxy traffic
-		},
+		Tags:      tags,
 	}
 
 	// Sign the event
@@ -241,19 +263,77 @@ func (nrh *NostrRelayHandler) GetRelayURL() string {
 
 // Helper functions for packet processing
 
-// ParseNostrEvent parses a Nostr event content to extract the packet
-func ParseNostrEvent(event *nostr.Event) (*Packet, error) {
+// ParsedPacket represents a packet with metadata extracted from Nostr event tags
+type ParsedPacket struct {
+	Packet     *Packet
+	Type       PacketType
+	SessionID  string
+	Sequence   uint64
+	Direction  string
+	TargetHost string
+	TargetPort int
+	ClientAddr string
+	ErrorMsg   string
+}
+
+// ParseNostrEvent parses a Nostr event to extract packet data and metadata from tags
+func ParseNostrEvent(event *nostr.Event) (*ParsedPacket, error) {
 	// Verify event kind
 	if event.Kind != 20547 {
 		return nil, fmt.Errorf("invalid event kind: %d", event.Kind)
 	}
 
-	var packet Packet
-	if err := json.Unmarshal([]byte(event.Content), &packet); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal packet: %v", err)
+	// Decode base64 content to get raw data
+	var data []byte
+	if event.Content != "" {
+		decoded, err := base64.StdEncoding.DecodeString(event.Content)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 content: %v", err)
+		}
+		data = decoded
 	}
 
-	return &packet, nil
+	// Create packet with raw data
+	packet := &Packet{Data: data}
+
+	// Extract metadata from tags
+	parsed := &ParsedPacket{Packet: packet}
+
+	// Helper function to get tag value
+	getTagValue := func(tagName string) string {
+		for _, tag := range event.Tags {
+			if len(tag) >= 2 && tag[0] == tagName {
+				return tag[1]
+			}
+		}
+		return ""
+	}
+
+	// Extract required metadata
+	parsed.Type = PacketType(getTagValue("type"))
+	parsed.SessionID = getTagValue("session")
+	parsed.Direction = getTagValue("direction")
+	
+	// Parse sequence number
+	if seqStr := getTagValue("sequence"); seqStr != "" {
+		if _, err := fmt.Sscanf(seqStr, "%d", &parsed.Sequence); err != nil {
+			return nil, fmt.Errorf("invalid sequence number: %s", seqStr)
+		}
+	}
+
+	// Extract optional metadata
+	parsed.TargetHost = getTagValue("target_host")
+	parsed.ClientAddr = getTagValue("client_addr")
+	parsed.ErrorMsg = getTagValue("error")
+	
+	// Parse target port
+	if portStr := getTagValue("target_port"); portStr != "" {
+		if _, err := fmt.Sscanf(portStr, "%d", &parsed.TargetPort); err != nil {
+			return nil, fmt.Errorf("invalid target port: %s", portStr)
+		}
+	}
+
+	return parsed, nil
 }
 
 // IsEventForMe checks if an event is tagged for the current public key

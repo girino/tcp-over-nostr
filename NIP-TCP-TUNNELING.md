@@ -41,12 +41,14 @@ TCP proxy events MUST be ephemeral events of kind `20547` with the following str
 ```json
 {
   "kind": 20547,
-  "content": "<base64-encoded-json-packet>",
+  "content": "<base64-encoded-tcp-data>",
   "tags": [
     ["p", "<recipient-pubkey>"],
     ["proxy", "tcp"],
+    ["type", "<packet-type>"],
     ["session", "<session-id>"],
-    ["seq", "<sequence-number>"]
+    ["sequence", "<sequence-number>"],
+    ["direction", "<direction>"]
   ],
   "created_at": <unix-timestamp>,
   "pubkey": "<sender-pubkey>",
@@ -57,53 +59,83 @@ TCP proxy events MUST be ephemeral events of kind `20547` with the following str
 
 ## Content Format
 
-The `content` field contains a base64-encoded JSON packet:
+The `content` field contains base64-encoded raw TCP data. All metadata is stored in event tags, making the protocol more Nostr-native.
 
-```json
-{
-  "type": "open|data|close",
-  "session_id": "<unique-session-identifier>",
-  "sequence": <packet-sequence-number>,
-  "data": "<base64-encoded-tcp-data>",
-  "timestamp": <unix-timestamp-microseconds>
-}
-```
+## Event Tags
+
+### Required Tags
+
+| Tag Name | Value | Description |
+|----------|-------|-------------|
+| `p` | `<recipient-pubkey>` | Nostr public key of the intended recipient |
+| `proxy` | `tcp` | Identifies this as TCP proxy traffic |
+| `type` | `<packet-type>` | Packet type: `open`, `data`, or `close` |
+| `session` | `<session-id>` | Unique session identifier |
+| `sequence` | `<sequence-number>` | Packet sequence number for ordering |
+| `direction` | `<direction>` | Data flow direction: `client_to_server` or `server_to_client` |
+
+### Optional Tags
+
+| Tag Name | Value | Description |
+|----------|-------|-------------|
+| `target_host` | `<hostname>` | Target hostname (for open packets) |
+| `target_port` | `<port>` | Target port number (for open packets) |
+| `client_addr` | `<address>` | Original client address |
+| `error` | `<error-message>` | Error message (for close packets) |
 
 ## Packet Types
 
 ### Open Packet
-Initiates a new TCP session (`type: "open"`):
+Initiates a new TCP session:
 ```json
 {
-  "type": "open",
-  "session_id": "session_1234567890_client_identifier",
-  "sequence": 0,
-  "data": "",
-  "timestamp": 1234567890123456
+  "kind": 20547,
+  "content": "",
+  "tags": [
+    ["p", "recipient_pubkey_here"],
+    ["proxy", "tcp"],
+    ["type", "open"],
+    ["session", "session_1234567890_client_identifier"],
+    ["sequence", "0"],
+    ["direction", "client_to_server"],
+    ["target_host", "example.com"],
+    ["target_port", "80"],
+    ["client_addr", "192.168.1.100:54321"]
+  ]
 }
 ```
 
 ### Data Packet
-Carries TCP payload data (`type: "data"`):
+Carries TCP payload data:
 ```json
 {
-  "type": "data", 
-  "session_id": "session_1234567890_client_identifier",
-  "sequence": 42,
-  "data": "SGVsbG8gV29ybGQ=",
-  "timestamp": 1234567890123456
+  "kind": 20547,
+  "content": "SGVsbG8gV29ybGQ=",
+  "tags": [
+    ["p", "recipient_pubkey_here"],
+    ["proxy", "tcp"],
+    ["type", "data"],
+    ["session", "session_1234567890_client_identifier"],
+    ["sequence", "42"],
+    ["direction", "client_to_server"]
+  ]
 }
 ```
 
 ### Close Packet
-Terminates a TCP session (`type: "close"`):
+Terminates a TCP session:
 ```json
 {
-  "type": "close",
-  "session_id": "session_1234567890_client_identifier", 
-  "sequence": 100,
-  "data": "",
-  "timestamp": 1234567890123456
+  "kind": 20547,
+  "content": "",
+  "tags": [
+    ["p", "recipient_pubkey_here"],
+    ["proxy", "tcp"],
+    ["type", "close"],
+    ["session", "session_1234567890_client_identifier"],
+    ["sequence", "100"],
+    ["direction", "client_to_server"]
+  ]
 }
 ```
 
@@ -186,6 +218,14 @@ TCP traffic is naturally transient, making ephemeral events appropriate for auto
 
 ### Kind 20547
 Selected from the ephemeral range (20000-29999), with "547" referencing the common relay port 10547 for easy identification.
+
+### Tag-Based Metadata
+Storing all metadata in event tags rather than JSON content provides several advantages:
+- **Nostr-Native**: Leverages Nostr's built-in tag system for structured data
+- **Efficient Filtering**: Relays can filter events by tags without parsing content
+- **Reduced Overhead**: Eliminates JSON serialization/deserialization overhead
+- **Better Indexing**: Relays can index and search by metadata tags
+- **Cleaner Content**: Content field contains only the actual TCP data
 
 ### Base64 Encoding
 Provides JSON-safe encoding for binary TCP data with reasonable size overhead and universal language support.
