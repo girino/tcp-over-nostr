@@ -10,7 +10,7 @@ TCP-over-Nostr enables secure, decentralized TCP tunneling using the Nostr proto
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   TCP-over-Nostr v1.0.0                    │
+│                   TCP-over-Nostr v1.1.0                    │
 │                                                             │
 │  Decentralized TCP Proxy over Nostr Protocol               │
 │  Author: Girino Vey                                        │
@@ -19,17 +19,23 @@ TCP-over-Nostr enables secure, decentralized TCP tunneling using the Nostr proto
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 🚨 **IMPORTANT SECURITY WARNINGS**
+## 🔐 **SECURITY FEATURES (v1.1.0+)**
 
-⚠️ **UNENCRYPTED TRAFFIC**: This proxy does **NOT** encrypt your TCP traffic. Data is transmitted in plaintext through Nostr events. Always use additional encryption (TLS/SSL, SSH, etc.) for sensitive data.
+✅ **END-TO-END ENCRYPTION**: All TCP traffic is now encrypted using NIP-59 Gift Wrap with NIP-44 encryption before transmission through Nostr events.
+
+✅ **EPHEMERAL EVENTS**: Uses ephemeral event kinds (20013, 21059) that are not stored permanently by relays.
+
+✅ **ONE-TIME KEYS**: Each message uses unique one-time keypairs to prevent correlation attacks.
+
+## 🚨 **IMPORTANT SECURITY WARNINGS**
 
 ⚠️ **PUBLIC RELAY RISKS**: When using public Nostr relays:
 - **Rate limiting** may throttle your connection
 - **Event size limits** may fragment large packets  
-- **No privacy guarantees** - your traffic metadata is visible
+- **Metadata visibility** - session IDs and packet counts are visible
 - **Potential logging** by relay operators
 
-⚠️ **PRODUCTION USAGE**: This software was "vibecoded" to v1.0.0. See [Development Notes](#development-notes) for important implications.
+⚠️ **PRODUCTION USAGE**: This software was "vibecoded" to v1.1.0. See [Development Notes](#development-notes) for important implications.
 
 ## 📋 **Table of Contents**
 
@@ -51,8 +57,10 @@ TCP-over-Nostr enables secure, decentralized TCP tunneling using the Nostr proto
 - 🌐 **Decentralized**: No central servers - uses Nostr relay network
 - 🔧 **Universal**: Tunnel any TCP service (SSH, HTTP, databases, etc.)
 - 🚀 **Real-time**: Low-latency packet delivery via WebSocket relays
+- 🔐 **End-to-End Encrypted**: NIP-59 Gift Wrap with NIP-44 encryption
 - 🔑 **Cryptographically Signed**: All events signed with Ed25519 keys
-- 📦 **Ephemeral Events**: Uses kind 20547 for relay-friendly cleanup
+- 📦 **Ephemeral Events**: Uses kinds 20013/21059 for automatic cleanup
+- 🎲 **One-Time Keys**: Unique keypairs prevent correlation attacks
 - 🎯 **Packet Ordering**: Handles out-of-order delivery automatically
 - 🔍 **Session Management**: Multiple concurrent connections supported
 - 📊 **Verbose Logging**: Detailed debugging and monitoring
@@ -238,9 +246,30 @@ ssh -p 2222 user@localhost
 
 # Use dedicated key files for multiple services
 -keys-file service-specific-keys.json
-
-# Monitor with separate terminals for client/server logs
 ```
+
+## 🔐 **Encryption Implementation (v1.1.0+)**
+
+TCP-over-Nostr v1.1.0 implements **NIP-59 Gift Wrap** encryption for secure transmission:
+
+### Encryption Flow
+1. **TCP Data** → **Rumor** (kind 20547, unsigned, contains raw data)
+2. **Rumor** → **Seal** (kind 20013, encrypted with sender↔recipient key)
+3. **Seal** → **Gift Wrap** (kind 21059, encrypted with one-time↔recipient key)
+4. **Gift Wrap** → **Relay** → **Recipient**
+5. **Recipient** unwraps: Gift Wrap → Seal → Rumor → TCP Data
+
+### Security Features
+- **NIP-44 Encryption**: Uses `secp256k1 ECDH, HKDF, ChaCha20, HMAC-SHA256`
+- **One-Time Keys**: Each gift wrap uses unique ephemeral keypairs
+- **Ephemeral Events**: Kinds 20013/21059 are not stored permanently by relays
+- **HMAC Validation**: Ensures message integrity and authenticity
+- **Forward Secrecy**: One-time keys prevent correlation attacks
+
+### Compatibility
+- **Requires**: NIP-44 and NIP-59 compatible relays
+- **Breaking Change**: Events now use kind 21059 instead of 20547
+- **Backward Incompatible**: v1.1.0+ cannot communicate with v1.0.x
 
 ## 🔒 **Security Considerations**
 
