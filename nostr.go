@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip44"
 )
 
 // NostrKeys represents a Nostr key pair
@@ -344,4 +345,270 @@ func IsEventForMe(event *nostr.Event, myPubkey string) bool {
 		}
 	}
 	return false
+}
+
+// Ephemeral Gift Wrap Implementation (NIP-59 with ephemeral kinds)
+
+// CreateEphemeralGiftWrappedEvent creates an ephemeral gift wrapped event for secure transmission
+// Uses ephemeral kinds (20000-29999) to ensure events are not stored permanently by relays
+func (km *KeyManager) CreateEphemeralGiftWrappedEvent(packet *Packet, targetPubkey string, packetType PacketType, sessionID string, sequence uint64, direction string, targetHost string, targetPort int, clientAddr string, errorMsg string) (*nostr.Event, error) {
+	if km.keys == nil {
+		return nil, fmt.Errorf("keys not loaded")
+	}
+
+	// 1. Create the rumor (unsigned event with kind 20547)
+	rumor, err := km.createEphemeralRumor(packet, packetType, sessionID, sequence, direction, targetHost, targetPort, clientAddr, errorMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create rumor: %v", err)
+	}
+
+	// 2. Create ephemeral seal (kind 20013) with encrypted rumor
+	seal, err := km.createEphemeralSeal(rumor, targetPubkey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create seal: %v", err)
+	}
+
+	// 3. Create ephemeral gift wrap (kind 21059) with encrypted seal
+	giftWrap, err := km.createEphemeralGiftWrap(seal, targetPubkey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gift wrap: %v", err)
+	}
+
+	return giftWrap, nil
+}
+
+// createEphemeralRumor creates an unsigned event (rumor) with kind 20547
+func (km *KeyManager) createEphemeralRumor(packet *Packet, packetType PacketType, sessionID string, sequence uint64, direction string, targetHost string, targetPort int, clientAddr string, errorMsg string) (*nostr.Event, error) {
+	// Encode packet data as base64 for content
+	var content string
+	if len(packet.Data) > 0 {
+		content = base64.StdEncoding.EncodeToString(packet.Data)
+	}
+
+	// Create tags with all metadata
+	tags := nostr.Tags{
+		{"proxy", "tcp"},                          // Identify as TCP proxy traffic
+		{"type", string(packetType)},              // Packet type (open, data, close, etc.)
+		{"session", sessionID},                    // Session identifier
+		{"sequence", fmt.Sprintf("%d", sequence)}, // Sequence number
+		{"direction", direction},                  // Direction (client_to_server, server_to_client)
+	}
+
+	// Add optional tags based on packet type
+	if targetHost != "" {
+		tags = append(tags, nostr.Tag{"target_host", targetHost})
+	}
+	if targetPort > 0 {
+		tags = append(tags, nostr.Tag{"target_port", fmt.Sprintf("%d", targetPort)})
+	}
+	if clientAddr != "" {
+		tags = append(tags, nostr.Tag{"client_addr", clientAddr})
+	}
+	if errorMsg != "" {
+		tags = append(tags, nostr.Tag{"error", errorMsg})
+	}
+
+	// Create unsigned rumor event
+	rumor := &nostr.Event{
+		Kind:      20547,   // Ephemeral event for TCP proxy packets
+		Content:   content, // Base64 encoded raw data only
+		CreatedAt: nostr.Timestamp(time.Now().Unix()),
+		Tags:      tags,
+		PubKey:    km.keys.PublicKey,
+	}
+
+	// Calculate ID for the rumor (but don't sign it)
+	rumor.ID = rumor.GetID()
+
+	return rumor, nil
+}
+
+// createEphemeralSeal creates an ephemeral seal (kind 20013) with encrypted rumor
+func (km *KeyManager) createEphemeralSeal(rumor *nostr.Event, targetPubkey string) (*nostr.Event, error) {
+	// Serialize rumor to JSON
+	rumorJSON, err := json.Marshal(rumor)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize rumor: %v", err)
+	}
+
+	// Generate conversation key for encryption
+	conversationKey, err := nip44.GenerateConversationKey(targetPubkey, km.keys.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
+	}
+
+	// Encrypt rumor using NIP-44
+	encryptedRumor, err := nip44.Encrypt(string(rumorJSON), conversationKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt rumor: %v", err)
+	}
+
+	// Create ephemeral seal event (kind 20013 - ephemeral version of kind 13)
+	seal := &nostr.Event{
+		Kind:      20013,          // Ephemeral seal event kind
+		Content:   encryptedRumor, // Encrypted rumor
+		CreatedAt: nostr.Timestamp(time.Now().Unix()),
+		Tags:      nostr.Tags{},      // Tags MUST be empty in seal events
+		PubKey:    km.keys.PublicKey, // Real author's pubkey
+	}
+
+	// Sign the seal
+	if err := seal.Sign(km.keys.PrivateKey); err != nil {
+		return nil, fmt.Errorf("failed to sign seal: %v", err)
+	}
+
+	return seal, nil
+}
+
+// createEphemeralGiftWrap creates an ephemeral gift wrap (kind 21059) with encrypted seal
+func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey string) (*nostr.Event, error) {
+	// Serialize seal to JSON
+	sealJSON, err := json.Marshal(seal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize seal: %v", err)
+	}
+
+	// Generate conversation key for encryption
+	conversationKey, err := nip44.GenerateConversationKey(targetPubkey, km.keys.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
+	}
+
+	// Encrypt seal using NIP-44
+	encryptedSeal, err := nip44.Encrypt(string(sealJSON), conversationKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt seal: %v", err)
+	}
+
+	// Generate a random one-time-use keypair for the gift wrap
+	oneTimePrivKey := nostr.GeneratePrivateKey()
+	oneTimePubKey, err := nostr.GetPublicKey(oneTimePrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive one-time public key: %v", err)
+	}
+
+	// Create ephemeral gift wrap event (kind 21059 - ephemeral version of kind 1059)
+	giftWrap := &nostr.Event{
+		Kind:      21059,         // Ephemeral gift wrap event kind
+		Content:   encryptedSeal, // Encrypted seal
+		CreatedAt: nostr.Timestamp(time.Now().Unix()),
+		Tags: nostr.Tags{
+			{"p", targetPubkey}, // Tag the recipient
+		},
+		PubKey: oneTimePubKey, // Random one-time-use pubkey
+	}
+
+	// Sign the gift wrap with the one-time key
+	if err := giftWrap.Sign(oneTimePrivKey); err != nil {
+		return nil, fmt.Errorf("failed to sign gift wrap: %v", err)
+	}
+
+	return giftWrap, nil
+}
+
+// UnwrapEphemeralGiftWrap unwraps an ephemeral gift wrapped event
+func (km *KeyManager) UnwrapEphemeralGiftWrap(giftWrap *nostr.Event) (*ParsedPacket, error) {
+	// Generate conversation key for decryption
+	conversationKey, err := nip44.GenerateConversationKey(giftWrap.PubKey, km.keys.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
+	}
+
+	// Decrypt the seal from the gift wrap
+	sealJSON, err := nip44.Decrypt(giftWrap.Content, conversationKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt seal: %v", err)
+	}
+
+	// Parse the seal
+	var seal nostr.Event
+	if err := json.Unmarshal([]byte(sealJSON), &seal); err != nil {
+		return nil, fmt.Errorf("failed to parse seal: %v", err)
+	}
+
+	// Verify seal signature
+	if ok, _ := seal.CheckSignature(); !ok {
+		return nil, fmt.Errorf("invalid seal signature")
+	}
+
+	// Generate conversation key for rumor decryption
+	rumorConversationKey, err := nip44.GenerateConversationKey(seal.PubKey, km.keys.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate rumor conversation key: %v", err)
+	}
+
+	// Decrypt the rumor from the seal
+	rumorJSON, err := nip44.Decrypt(seal.Content, rumorConversationKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt rumor: %v", err)
+	}
+
+	// Parse the rumor
+	var rumor nostr.Event
+	if err := json.Unmarshal([]byte(rumorJSON), &rumor); err != nil {
+		return nil, fmt.Errorf("failed to parse rumor: %v", err)
+	}
+
+	// Parse the rumor as a ParsedPacket
+	return km.parseRumorAsPacket(&rumor)
+}
+
+// parseRumorAsPacket parses a rumor event into a ParsedPacket
+func (km *KeyManager) parseRumorAsPacket(rumor *nostr.Event) (*ParsedPacket, error) {
+	// Verify event kind
+	if rumor.Kind != 20547 {
+		return nil, fmt.Errorf("invalid rumor kind: %d", rumor.Kind)
+	}
+
+	// Decode base64 content to get raw data
+	var data []byte
+	if rumor.Content != "" {
+		decoded, err := base64.StdEncoding.DecodeString(rumor.Content)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 content: %v", err)
+		}
+		data = decoded
+	}
+
+	// Create packet with raw data
+	packet := &Packet{Data: data}
+
+	// Extract metadata from tags
+	parsed := &ParsedPacket{Packet: packet}
+
+	// Helper function to get tag value
+	getTagValue := func(tagName string) string {
+		for _, tag := range rumor.Tags {
+			if len(tag) >= 2 && tag[0] == tagName {
+				return tag[1]
+			}
+		}
+		return ""
+	}
+
+	// Extract required metadata
+	parsed.Type = PacketType(getTagValue("type"))
+	parsed.SessionID = getTagValue("session")
+	parsed.Direction = getTagValue("direction")
+
+	// Parse sequence number
+	if seqStr := getTagValue("sequence"); seqStr != "" {
+		if _, err := fmt.Sscanf(seqStr, "%d", &parsed.Sequence); err != nil {
+			return nil, fmt.Errorf("invalid sequence number: %s", seqStr)
+		}
+	}
+
+	// Extract optional metadata
+	parsed.TargetHost = getTagValue("target_host")
+	parsed.ClientAddr = getTagValue("client_addr")
+	parsed.ErrorMsg = getTagValue("error")
+
+	// Parse target port
+	if portStr := getTagValue("target_port"); portStr != "" {
+		if _, err := fmt.Sscanf(portStr, "%d", &parsed.TargetPort); err != nil {
+			return nil, fmt.Errorf("invalid target port: %s", portStr)
+		}
+	}
+
+	return parsed, nil
 }
