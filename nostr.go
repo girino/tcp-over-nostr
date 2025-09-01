@@ -153,7 +153,7 @@ func (km *KeyManager) CreateNostrEvent(packet *Packet, targetPubkey string, pack
 
 // NostrRelayHandler handles communication with multiple Nostr relays
 type NostrRelayHandler struct {
-	pool      *nostr.Pool
+	pool      *nostr.SimplePool
 	relayURLs []string
 	keyMgr    *KeyManager
 	verbose   bool
@@ -167,12 +167,12 @@ type NostrRelayHandler struct {
 func NewNostrRelayHandler(relayURLs []string, keyMgr *KeyManager, verbose bool) (*NostrRelayHandler, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create a pool of relays using the standard library
-	pool := nostr.NewPool(ctx)
+	// Create a simple pool of relays using the standard library
+	pool := nostr.NewSimplePool(ctx)
 
 	// Add all relays to the pool
 	for _, relayURL := range relayURLs {
-		relay, err := pool.EnsureRelay(relayURL)
+		_, err := pool.EnsureRelay(relayURL)
 		if err != nil {
 			if verbose {
 				log.Printf("Failed to add relay %s to pool: %v", relayURL, err)
@@ -185,7 +185,7 @@ func NewNostrRelayHandler(relayURLs []string, keyMgr *KeyManager, verbose bool) 
 	}
 
 	// Check if we have any relays in the pool
-	if len(pool.Relays) == 0 {
+	if pool.Relays.Size() == 0 {
 		cancel()
 		return nil, fmt.Errorf("failed to add any relay to pool")
 	}
@@ -201,7 +201,7 @@ func NewNostrRelayHandler(relayURLs []string, keyMgr *KeyManager, verbose bool) 
 	}
 
 	if verbose {
-		log.Printf("Created pool with %d relay(s): %v", len(pool.Relays), relayURLs)
+		log.Printf("Created pool with %d relay(s): %v", pool.Relays.Size(), relayURLs)
 	}
 
 	return handler, nil
@@ -215,25 +215,22 @@ func (nrh *NostrRelayHandler) Close() {
 
 // PublishEvent publishes a Nostr event to all relays in the pool
 func (nrh *NostrRelayHandler) PublishEvent(event *nostr.Event) error {
-	// Use the pool's Publish method which handles multiple relays automatically
-	statuses, err := nrh.pool.Publish(nrh.ctx, *event)
-	if err != nil {
-		return fmt.Errorf("failed to publish event: %v", err)
-	}
+	// Use the pool's PublishMany method which handles multiple relays automatically
+	results := nrh.pool.PublishMany(nrh.ctx, nrh.relayURLs, *event)
 
 	successCount := 0
 	var errors []string
 
-	for relayURL, status := range statuses {
-		if status.Err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", relayURL, status.Err))
+	for result := range results {
+		if result.Error != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
 			if nrh.verbose {
-				log.Printf("Failed to publish event %s to relay %s: %v", event.ID, relayURL, status.Err)
+				log.Printf("Failed to publish event %s to relay %s: %v", event.ID, result.RelayURL, result.Error)
 			}
 		} else {
 			successCount++
 			if nrh.verbose {
-				log.Printf("Published event %s to relay %s", event.ID, relayURL)
+				log.Printf("Published event %s to relay %s", event.ID, result.RelayURL)
 			}
 		}
 	}
@@ -243,7 +240,7 @@ func (nrh *NostrRelayHandler) PublishEvent(event *nostr.Event) error {
 	}
 
 	if len(errors) > 0 && nrh.verbose {
-		log.Printf("Published to %d/%d relays, errors: %v", successCount, len(statuses), errors)
+		log.Printf("Published to %d/%d relays, errors: %v", successCount, len(nrh.relayURLs), errors)
 	}
 
 	return nil
@@ -257,22 +254,22 @@ func (nrh *NostrRelayHandler) SubscribeToEvents(targetPubkey string) error {
 		Tags:  nostr.TagMap{"p": []string{targetPubkey}}, // Events tagged for us
 	}
 
-	// Use the pool's Subscribe method which handles multiple relays and deduplication automatically
-	sub := nrh.pool.Sub(nrh.ctx, []nostr.Filter{filter})
+	// Use the pool's SubscribeMany method which handles multiple relays and deduplication automatically
+	events := nrh.pool.SubscribeMany(nrh.ctx, nrh.relayURLs, filter)
 
 	// Start goroutine to handle incoming events
 	go func() {
-		for event := range sub.Events {
+		for relayEvent := range events {
 			select {
-			case nrh.eventChan <- event:
+			case nrh.eventChan <- relayEvent.Event:
 				if nrh.verbose {
-					log.Printf("Received event %s", event.ID)
+					log.Printf("Received event %s from relay %s", relayEvent.Event.ID, relayEvent.Relay)
 				}
 			case <-nrh.ctx.Done():
 				return
 			default:
 				if nrh.verbose {
-					log.Printf("Event channel full, dropping event %s", event.ID)
+					log.Printf("Event channel full, dropping event %s from relay %s", relayEvent.Event.ID, relayEvent.Relay)
 				}
 			}
 		}
@@ -293,22 +290,22 @@ func (nrh *NostrRelayHandler) SubscribeToGiftWrapEvents(targetPubkey string) err
 		Tags:  nostr.TagMap{"p": []string{targetPubkey}}, // Events tagged for us
 	}
 
-	// Use the pool's Subscribe method which handles multiple relays and deduplication automatically
-	sub := nrh.pool.Sub(nrh.ctx, []nostr.Filter{filter})
+	// Use the pool's SubscribeMany method which handles multiple relays and deduplication automatically
+	events := nrh.pool.SubscribeMany(nrh.ctx, nrh.relayURLs, filter)
 
 	// Start goroutine to handle incoming events
 	go func() {
-		for event := range sub.Events {
+		for relayEvent := range events {
 			select {
-			case nrh.eventChan <- event:
+			case nrh.eventChan <- relayEvent.Event:
 				if nrh.verbose {
-					log.Printf("Received encrypted gift wrap event %s", event.ID)
+					log.Printf("Received encrypted gift wrap event %s from relay %s", relayEvent.Event.ID, relayEvent.Relay)
 				}
 			case <-nrh.ctx.Done():
 				return
 			default:
 				if nrh.verbose {
-					log.Printf("Event channel full, dropping gift wrap event %s", event.ID)
+					log.Printf("Event channel full, dropping gift wrap event %s from relay %s", relayEvent.Event.ID, relayEvent.Relay)
 				}
 			}
 		}
