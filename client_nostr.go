@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func runClientNostr(clientPort int, relayURLs []string, serverPubkey, keysFile string, verbose bool) {
+func runClientNostr(clientPort int, relayURLs []string, serverPubkey, privateKey string, verbose bool) {
 	// Show startup banner
 	fmt.Print(GetBanner())
 
@@ -22,21 +22,42 @@ func runClientNostr(clientPort int, relayURLs []string, serverPubkey, keysFile s
 		log.Fatal("Server public key is required for Nostr mode")
 	}
 
+	// Parse server public key (hex or npub format)
+	serverPubkeyHex, err := ParsePublicKey(serverPubkey)
+	if err != nil {
+		log.Fatalf("Failed to parse server public key: %v", err)
+	}
+
 	fmt.Printf("Starting TCP proxy client (Nostr mode):\n")
 	fmt.Printf("  Listen port: %d\n", clientPort)
-	fmt.Printf("  Server pubkey: %s\n", serverPubkey)
+	fmt.Printf("  Server pubkey: %s\n", serverPubkeyHex)
 	fmt.Printf("  Relay URLs: %v\n", relayURLs)
-	fmt.Printf("  Keys file: %s\n", keysFile)
 	fmt.Printf("  Verbose logging: %t\n\n", verbose)
 
 	// Initialize key manager
-	keyMgr := NewKeyManager(keysFile)
-	if err := keyMgr.LoadKeys(); err != nil {
-		log.Fatalf("Failed to load/generate keys: %v", err)
+	keyMgr := NewKeyManager("")
+	if privateKey != "" {
+		// Use provided private key
+		if err := keyMgr.LoadKeysFromPrivateKey(privateKey); err != nil {
+			log.Fatalf("Failed to load keys from private key: %v", err)
+		}
+	} else {
+		// Generate new keys
+		if err := keyMgr.GenerateKeys(); err != nil {
+			log.Fatalf("Failed to generate keys: %v", err)
+		}
 	}
 
 	clientKeys := keyMgr.GetKeys()
-	fmt.Printf("Client Nostr pubkey: %s\n\n", clientKeys.PublicKey)
+
+	// Generate npub format for display
+	clientNpub, err := EncodePublicKeyToNpub(clientKeys.PublicKey)
+	if err != nil {
+		fmt.Printf("Client Nostr pubkey (hex): %s\n\n", clientKeys.PublicKey)
+	} else {
+		fmt.Printf("Client Nostr pubkey (hex): %s\n", clientKeys.PublicKey)
+		fmt.Printf("Client Nostr pubkey (npub): %s\n\n", clientNpub)
+	}
 
 	// Initialize relay handler
 	relayHandler, err := NewNostrRelayHandler(relayURLs, keyMgr, verbose)
@@ -72,7 +93,7 @@ func runClientNostr(clientPort int, relayURLs []string, serverPubkey, keysFile s
 		}
 
 		// Handle each connection in a goroutine
-		go handleClientConnectionNostr(conn, relayHandler, keyMgr, serverPubkey, clientKeys.PublicKey, verbose)
+		go handleClientConnectionNostr(conn, relayHandler, keyMgr, serverPubkeyHex, clientKeys.PublicKey, verbose)
 	}
 }
 
@@ -85,7 +106,7 @@ func sanitizeSessionID(sessionID string) string {
 	return sessionID
 }
 
-func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler, keyMgr *KeyManager, serverPubkey, clientPubkey string, verbose bool) {
+func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler, keyMgr *KeyManager, serverPubkeyHex, clientPubkey string, verbose bool) {
 	defer conn.Close()
 
 	clientAddr := conn.RemoteAddr().String()
@@ -98,7 +119,7 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 
 	// Send open packet
 	openPacket := CreateEmptyPacket()
-	if err := sendNostrPacket(relayHandler, keyMgr, openPacket, serverPubkey, PacketTypeOpen, sessionID, 0, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
+	if err := sendNostrPacket(relayHandler, keyMgr, openPacket, serverPubkeyHex, PacketTypeOpen, sessionID, 0, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
 		log.Printf("Client: Failed to send open packet: %v", err)
 		return
 	}
@@ -125,7 +146,7 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 		if n > 0 {
 			// Create data packet
 			dataPacket := CreateDataPacket(buffer[:n])
-			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, serverPubkey, PacketTypeData, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
+			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, serverPubkeyHex, PacketTypeData, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
 				log.Printf("Client: Failed to send data packet: %v", err)
 				break
 			}
@@ -139,7 +160,7 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 
 	// Send close packet
 	closePacket := CreateEmptyPacket()
-	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, serverPubkey, PacketTypeClose, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
+	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, serverPubkeyHex, PacketTypeClose, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
 		log.Printf("Client: Failed to send close packet: %v", err)
 	}
 

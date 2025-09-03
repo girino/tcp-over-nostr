@@ -1,0 +1,119 @@
+services:
+  # TCP-over-Nostr Server
+  tcp-over-nostr-server:
+    build: .
+    container_name: tcp-over-nostr-server
+    restart: unless-stopped
+    
+    # Environment variables
+    env_file:
+      - .env.server
+    
+    # Port mappings
+    ports:
+      - "8080:8080"  # Default client port
+      - "2222:2222"  # Common SSH proxy port
+      - "80:80"      # HTTP port
+      - "443:443"    # HTTPS port
+    
+    # Environment variables (can override .env file)
+    environment:
+      - TON_MODE=server
+      - TON_TARGET_HOST=httpbin.org:80
+      - TON_TARGET_PORT=80
+      - TON_RELAY=wss://relay.damus.io,wss://relay.primal.net,wss://nostr.girino.org
+      - TON_VERBOSE=true
+      # TON_PRIVATE_KEY=nsec1...
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "tcp-proxy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  # TCP-over-Nostr Client
+  tcp-over-nostr-client:
+    build: .
+    container_name: tcp-over-nostr-client
+    restart: unless-stopped
+    
+    # Environment variables
+    env_file:
+      - .env.client
+    
+    # Port mappings
+    ports:
+      - "8081:8080"  # Client port (different from server)
+      - "2223:2222"  # SSH proxy port (different from server)
+      - "3000:3000"  # Alternative client port
+      - "5432:5432"  # Database proxy port
+    
+    # Environment variables (can override .env file)
+    environment:
+      - TON_MODE=client
+      - TON_CLIENT_PORT=8080
+      # TON_SERVER_KEY=npub1...  # Set this from server output
+      - TON_RELAY=wss://relay.damus.io,wss://relay.primal.net,wss://nostr.girino.org
+      - TON_VERBOSE=true
+      # TON_PRIVATE_KEY=nsec1...
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "tcp-proxy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+# Example usage:
+# 1. Copy env.server.example to .env.server and configure
+# 2. Copy env.client.example to .env.client and configure
+# 3. Run both: docker compose up -d
+# 4. Run only server: docker compose up -d tcp-over-nostr-server
+# 5. Run only client: docker compose up -d tcp-over-nostr-client
+# 6. Check logs: docker compose logs -f
+# 7. Stop: docker compose down

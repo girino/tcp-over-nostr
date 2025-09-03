@@ -8,7 +8,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-func runServerNostr(targetHost string, targetPort int, relayURLs []string, keysFile string, verbose bool) {
+func runServerNostr(targetHost string, targetPort int, relayURLs []string, privateKey string, verbose bool) {
 	// Show startup banner
 	fmt.Print(GetBanner())
 
@@ -22,17 +22,33 @@ func runServerNostr(targetHost string, targetPort int, relayURLs []string, keysF
 	fmt.Printf("Starting TCP proxy server (Nostr mode):\n")
 	fmt.Printf("  Target: %s\n", targetAddr)
 	fmt.Printf("  Relay URLs: %v\n", relayURLs)
-	fmt.Printf("  Keys file: %s\n", keysFile)
 	fmt.Printf("  Verbose logging: %t\n\n", verbose)
 
 	// Initialize key manager
-	keyMgr := NewKeyManager(keysFile)
-	if err := keyMgr.LoadKeys(); err != nil {
-		log.Fatalf("Failed to load/generate keys: %v", err)
+	keyMgr := NewKeyManager("")
+	if privateKey != "" {
+		// Use provided private key
+		if err := keyMgr.LoadKeysFromPrivateKey(privateKey); err != nil {
+			log.Fatalf("Failed to load keys from private key: %v", err)
+		}
+	} else {
+		// Generate new keys
+		if err := keyMgr.GenerateKeys(); err != nil {
+			log.Fatalf("Failed to generate keys: %v", err)
+		}
 	}
 
 	serverKeys := keyMgr.GetKeys()
-	fmt.Printf("Server Nostr pubkey: %s\n", serverKeys.PublicKey)
+
+	// Generate npub format for display
+	npub, err := EncodePublicKeyToNpub(serverKeys.PublicKey)
+	if err != nil {
+		fmt.Printf("Server Nostr pubkey (hex): %s\n", serverKeys.PublicKey)
+		fmt.Printf("Warning: Failed to generate npub format: %v\n", err)
+	} else {
+		fmt.Printf("Server Nostr pubkey (hex): %s\n", serverKeys.PublicKey)
+		fmt.Printf("Server Nostr pubkey (npub): %s\n", npub)
+	}
 	fmt.Printf("Share this pubkey with clients using -server-key parameter\n\n")
 
 	// Initialize relay handler

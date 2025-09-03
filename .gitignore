@@ -41,6 +41,11 @@ events/
 *-keys.json
 nostr-keys.json
 
+# Environment files
+.env
+.env.*
+!.env.*.example
+
 # Log files
 *.log
 

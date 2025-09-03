@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip19"
 	"github.com/nbd-wtf/go-nostr/nip44"
 )
 
@@ -23,31 +23,14 @@ type NostrKeys struct {
 	PublicKey  string `json:"public_key"`
 }
 
-// KeyManager handles Nostr key generation and storage
+// KeyManager handles Nostr key generation
 type KeyManager struct {
-	keysFile string
-	keys     *NostrKeys
+	keys *NostrKeys
 }
 
 // NewKeyManager creates a new key manager
 func NewKeyManager(keysFile string) *KeyManager {
-	return &KeyManager{
-		keysFile: keysFile,
-	}
-}
-
-// LoadKeys loads keys from file or generates new ones
-func (km *KeyManager) LoadKeys() error {
-	// Try to load existing keys
-	if data, err := os.ReadFile(km.keysFile); err == nil {
-		if err := json.Unmarshal(data, &km.keys); err != nil {
-			return fmt.Errorf("failed to parse keys file: %v", err)
-		}
-		return nil
-	}
-
-	// Generate new keys if file doesn't exist
-	return km.GenerateKeys()
+	return &KeyManager{}
 }
 
 // GenerateKeys generates new Nostr keys
@@ -69,34 +52,242 @@ func (km *KeyManager) GenerateKeys() error {
 		PublicKey:  publicKey,
 	}
 
-	// Save keys to file
-	return km.SaveKeys()
-}
-
-// SaveKeys saves keys to file
-func (km *KeyManager) SaveKeys() error {
-	data, err := json.MarshalIndent(km.keys, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal keys: %v", err)
-	}
-
-	// Ensure directory exists
-	if dir := filepath.Dir(km.keysFile); dir != "." {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return fmt.Errorf("failed to create keys directory: %v", err)
-		}
-	}
-
-	if err := os.WriteFile(km.keysFile, data, 0600); err != nil {
-		return fmt.Errorf("failed to write keys file: %v", err)
-	}
-
 	return nil
 }
 
 // GetKeys returns the loaded keys
 func (km *KeyManager) GetKeys() *NostrKeys {
 	return km.keys
+}
+
+// ParsePrivateKey parses a private key from hex or nsec format
+func ParsePrivateKey(privateKeyStr string) (string, error) {
+	if privateKeyStr == "" {
+		return "", fmt.Errorf("private key cannot be empty")
+	}
+
+	// Check if it's nsec format
+	if strings.HasPrefix(privateKeyStr, "nsec") {
+		return parseNsecKey(privateKeyStr)
+	}
+
+	// Assume hex format
+	return parseHexKey(privateKeyStr)
+}
+
+// parseNsecKey parses a private key from nsec format
+func parseNsecKey(nsec string) (string, error) {
+	// Validate nsec format
+	if len(nsec) < 5 {
+		return "", fmt.Errorf("invalid nsec format: too short")
+	}
+
+	if !strings.HasPrefix(nsec, "nsec") {
+		return "", fmt.Errorf("invalid nsec format: must start with 'nsec'")
+	}
+
+	// Decode nsec using nip19
+	prefix, data, err := nip19.Decode(nsec)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode nsec: %v", err)
+	}
+
+	// Validate prefix
+	if prefix != "nsec" {
+		return "", fmt.Errorf("invalid nsec format: expected 'nsec' prefix, got '%s'", prefix)
+	}
+
+	// Handle different possible return types from nip19.Decode
+	var dataBytes []byte
+	switch v := data.(type) {
+	case []byte:
+		dataBytes = v
+	case string:
+		// If it's a string, try to decode it as hex
+		var err error
+		dataBytes, err = hex.DecodeString(v)
+		if err != nil {
+			return "", fmt.Errorf("invalid nsec format: data string is not valid hex: %v", err)
+		}
+	default:
+		return "", fmt.Errorf("invalid nsec format: unexpected data type %T", data)
+	}
+
+	// Validate length (should be 32 bytes for private key)
+	if len(dataBytes) != 32 {
+		return "", fmt.Errorf("invalid nsec format: expected 32 bytes, got %d bytes", len(dataBytes))
+	}
+
+	// Convert data to hex string
+	hexKey := hex.EncodeToString(dataBytes)
+
+	return hexKey, nil
+}
+
+// ParsePublicKey parses a public key from hex or npub format
+func ParsePublicKey(publicKeyStr string) (string, error) {
+	if publicKeyStr == "" {
+		return "", fmt.Errorf("public key cannot be empty")
+	}
+
+	// Check if it's npub format
+	if strings.HasPrefix(publicKeyStr, "npub") {
+		return parseNpubKey(publicKeyStr)
+	}
+
+	// Assume hex format
+	return parseHexPublicKey(publicKeyStr)
+}
+
+// parseNpubKey parses a public key from npub format
+func parseNpubKey(npub string) (string, error) {
+	// Validate npub format
+	if len(npub) < 5 {
+		return "", fmt.Errorf("invalid npub format: too short")
+	}
+
+	if !strings.HasPrefix(npub, "npub") {
+		return "", fmt.Errorf("invalid npub format: must start with 'npub'")
+	}
+
+	// Decode npub using nip19
+	prefix, data, err := nip19.Decode(npub)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode npub: %v", err)
+	}
+
+	// Validate prefix
+	if prefix != "npub" {
+		return "", fmt.Errorf("invalid npub format: expected 'npub' prefix, got '%s'", prefix)
+	}
+
+	// Handle different possible return types from nip19.Decode
+	var dataBytes []byte
+	switch v := data.(type) {
+	case []byte:
+		dataBytes = v
+	case string:
+		// If it's a string, try to decode it as hex
+		var err error
+		dataBytes, err = hex.DecodeString(v)
+		if err != nil {
+			return "", fmt.Errorf("invalid npub format: data string is not valid hex: %v", err)
+		}
+	default:
+		return "", fmt.Errorf("invalid npub format: unexpected data type %T", data)
+	}
+
+	// Validate length (should be 32 bytes for public key)
+	if len(dataBytes) != 32 {
+		return "", fmt.Errorf("invalid npub format: expected 32 bytes, got %d bytes", len(dataBytes))
+	}
+
+	// Convert data to hex string
+	hexKey := hex.EncodeToString(dataBytes)
+	return hexKey, nil
+}
+
+// parseHexPublicKey parses a public key from hex format
+func parseHexPublicKey(hexKey string) (string, error) {
+	// Remove any 0x prefix if present
+	hexKey = strings.TrimPrefix(hexKey, "0x")
+
+	// Decode hex to verify it's valid
+	keyBytes, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return "", fmt.Errorf("invalid hex public key: %v", err)
+	}
+
+	// Check if it's 32 bytes (256 bits)
+	if len(keyBytes) != 32 {
+		return "", fmt.Errorf("public key must be 32 bytes (64 hex characters), got %d bytes", len(keyBytes))
+	}
+
+	return hexKey, nil
+}
+
+// EncodePublicKeyToNpub converts a hex public key to npub format
+func EncodePublicKeyToNpub(hexKey string) (string, error) {
+	// Decode hex to bytes
+	keyBytes, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return "", fmt.Errorf("invalid hex public key: %v", err)
+	}
+
+	// Validate length
+	if len(keyBytes) != 32 {
+		return "", fmt.Errorf("public key must be 32 bytes, got %d bytes", len(keyBytes))
+	}
+
+	// Encode to npub using nip19
+	npub, err := nip19.EncodePublicKey(hexKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode npub: %v", err)
+	}
+
+	return npub, nil
+}
+
+// EncodePrivateKeyToNsec converts a hex private key to nsec format
+func EncodePrivateKeyToNsec(hexKey string) (string, error) {
+	// Decode hex to bytes
+	keyBytes, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return "", fmt.Errorf("invalid hex private key: %v", err)
+	}
+
+	// Validate length
+	if len(keyBytes) != 32 {
+		return "", fmt.Errorf("private key must be 32 bytes, got %d bytes", len(keyBytes))
+	}
+
+	// Encode to nsec using nip19
+	nsec, err := nip19.EncodePrivateKey(hexKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode nsec: %v", err)
+	}
+
+	return nsec, nil
+}
+
+// parseHexKey parses a private key from hex format
+func parseHexKey(hexKey string) (string, error) {
+	// Remove any 0x prefix if present
+	hexKey = strings.TrimPrefix(hexKey, "0x")
+
+	// Decode hex to verify it's valid
+	keyBytes, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return "", fmt.Errorf("invalid hex private key: %v", err)
+	}
+
+	// Check if it's 32 bytes (256 bits)
+	if len(keyBytes) != 32 {
+		return "", fmt.Errorf("private key must be 32 bytes (64 hex characters), got %d bytes", len(keyBytes))
+	}
+
+	return hexKey, nil
+}
+
+// LoadKeysFromPrivateKey loads keys using a provided private key string
+func (km *KeyManager) LoadKeysFromPrivateKey(privateKeyStr string) error {
+	privateKeyHex, err := ParsePrivateKey(privateKeyStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse private key: %v", err)
+	}
+
+	// Derive public key from private key
+	publicKey, err := nostr.GetPublicKey(privateKeyHex)
+	if err != nil {
+		return fmt.Errorf("failed to derive public key: %v", err)
+	}
+
+	km.keys = &NostrKeys{
+		PrivateKey: privateKeyHex,
+		PublicKey:  publicKey,
+	}
+
+	return nil
 }
 
 // CreateNostrEvent creates a Nostr event for a packet with metadata in tags

@@ -1,0 +1,61 @@
+services:
+  tcp-over-nostr-client:
+    build: .
+    container_name: tcp-over-nostr-client
+    restart: unless-stopped
+    
+    # Environment variables
+    env_file:
+      - .env
+    
+    # Port mappings
+    ports:
+      # Expose client ports
+      - "8080:8080"  # Default client port
+      - "2222:2222"  # Common SSH proxy port
+      - "3000:3000"  # Alternative client port
+      - "5432:5432"  # Database proxy port
+    
+    # Environment variables (can override .env file)
+    environment:
+      - TON_MODE=client
+      - TON_CLIENT_PORT=8080
+      # TON_SERVER_KEY=npub1...  # Set this from server output
+      - TON_RELAY=wss://relay.damus.io,wss://relay.primal.net,wss://nostr.girino.org
+      - TON_VERBOSE=true
+      # TON_PRIVATE_KEY=nsec1...
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "tcp-proxy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+# Example usage:
+# 1. Copy env.client.example to .env and configure
+# 2. Run: docker compose -f docker-compose.client.yml up -d
+# 3. Check logs: docker compose -f docker-compose.client.yml logs -f
+# 4. Stop: docker compose -f docker-compose.client.yml down
