@@ -24,20 +24,26 @@ type NostrKeys struct {
 	PublicKey  string `json:"public_key"`
 }
 
+// KeyPair represents a key pair for ephemeral keys
+type KeyPair struct {
+	PrivateKey string
+	PublicKey  string
+}
+
 // KeyManager handles Nostr key generation
 type KeyManager struct {
 	keys *NostrKeys
-	
+
 	// Pre-generated ephemeral key pool
-	ephemeralKeyPool []*nostr.KeyPair
-	keyPoolIndex     uint64  // Atomic counter for rotation
+	ephemeralKeyPool []*KeyPair
+	keyPoolIndex     uint64 // Atomic counter for rotation
 	keyPoolSize      int
-	
+
 	// Pre-computed conversation key cache
 	// targetPubkey -> []conversationKey (indexed by ephemeral key index)
-	conversationKeyCache map[string][][]byte
-	cacheMutex          sync.RWMutex
-	
+	conversationKeyCache map[string][][32]byte
+	cacheMutex           sync.RWMutex
+
 	// Track which targets have been initialized
 	initializedTargets map[string]bool
 }
@@ -45,33 +51,33 @@ type KeyManager struct {
 // NewKeyManager creates a new key manager
 func NewKeyManager(keysFile string) *KeyManager {
 	km := &KeyManager{
-		conversationKeyCache: make(map[string][][]byte),
-		initializedTargets:  make(map[string]bool),
+		conversationKeyCache: make(map[string][][32]byte),
+		initializedTargets:   make(map[string]bool),
 	}
-	
+
 	// Initialize ephemeral key pool
 	km.initializeEphemeralKeyPool()
-	
+
 	return km
 }
 
 // initializeEphemeralKeyPool pre-generates 5000 ephemeral keypairs for performance
 func (km *KeyManager) initializeEphemeralKeyPool() {
 	km.keyPoolSize = 5000
-	km.ephemeralKeyPool = make([]*nostr.KeyPair, km.keyPoolSize)
-	
+	km.ephemeralKeyPool = make([]*KeyPair, km.keyPoolSize)
+
 	for i := 0; i < km.keyPoolSize; i++ {
 		privKey := nostr.GeneratePrivateKey()
 		pubKey, err := nostr.GetPublicKey(privKey)
 		if err != nil {
 			panic(fmt.Sprintf("Failed to generate ephemeral key %d: %v", i, err))
 		}
-		km.ephemeralKeyPool[i] = &nostr.KeyPair{
+		km.ephemeralKeyPool[i] = &KeyPair{
 			PrivateKey: privKey,
 			PublicKey:  pubKey,
 		}
 	}
-	
+
 	log.Printf("Initialized ephemeral key pool with %d keys", km.keyPoolSize)
 }
 
@@ -79,15 +85,15 @@ func (km *KeyManager) initializeEphemeralKeyPool() {
 func (km *KeyManager) initializeTargetCache(targetPubkey string) error {
 	km.cacheMutex.Lock()
 	defer km.cacheMutex.Unlock()
-	
+
 	// Skip if already initialized
 	if km.initializedTargets[targetPubkey] {
 		return nil
 	}
-	
+
 	// Initialize conversation key array for this target
-	conversationKeys := make([][]byte, km.keyPoolSize)
-	
+	conversationKeys := make([][32]byte, km.keyPoolSize)
+
 	// Pre-compute all conversation keys
 	for i := 0; i < km.keyPoolSize; i++ {
 		conversationKey, err := nip44.GenerateConversationKey(targetPubkey, km.ephemeralKeyPool[i].PrivateKey)
@@ -96,26 +102,26 @@ func (km *KeyManager) initializeTargetCache(targetPubkey string) error {
 		}
 		conversationKeys[i] = conversationKey
 	}
-	
+
 	// Cache the conversation keys
 	km.conversationKeyCache[targetPubkey] = conversationKeys
 	km.initializedTargets[targetPubkey] = true
-	
+
 	log.Printf("Pre-computed %d conversation keys for target %s", km.keyPoolSize, targetPubkey)
 	return nil
 }
 
 // getNextEphemeralKey returns the next ephemeral key with atomic rotation
-func (km *KeyManager) getNextEphemeralKey() (*nostr.KeyPair, int) {
+func (km *KeyManager) getNextEphemeralKey() (*KeyPair, int) {
 	index := atomic.AddUint64(&km.keyPoolIndex, 1) % uint64(km.keyPoolSize)
 	return km.ephemeralKeyPool[index], int(index)
 }
 
 // getConversationKey returns a pre-computed conversation key
-func (km *KeyManager) getConversationKey(targetPubkey string, ephemeralKeyIndex int) []byte {
+func (km *KeyManager) getConversationKey(targetPubkey string, ephemeralKeyIndex int) [32]byte {
 	km.cacheMutex.RLock()
 	defer km.cacheMutex.RUnlock()
-	
+
 	return km.conversationKeyCache[targetPubkey][ephemeralKeyIndex]
 }
 
@@ -124,7 +130,7 @@ func (km *KeyManager) ensureTargetInitialized(targetPubkey string) error {
 	km.cacheMutex.RLock()
 	initialized := km.initializedTargets[targetPubkey]
 	km.cacheMutex.RUnlock()
-	
+
 	if !initialized {
 		return km.initializeTargetCache(targetPubkey)
 	}
@@ -830,7 +836,7 @@ func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey st
 	if err := km.ensureTargetInitialized(targetPubkey); err != nil {
 		return nil, fmt.Errorf("failed to initialize target cache: %v", err)
 	}
-	
+
 	// Get pre-generated one-time key and its index
 	oneTimeKey, ephemeralKeyIndex := km.getNextEphemeralKey()
 
