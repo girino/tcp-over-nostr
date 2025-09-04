@@ -10,6 +10,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -26,11 +27,108 @@ type NostrKeys struct {
 // KeyManager handles Nostr key generation
 type KeyManager struct {
 	keys *NostrKeys
+	
+	// Pre-generated ephemeral key pool
+	ephemeralKeyPool []*nostr.KeyPair
+	keyPoolIndex     uint64  // Atomic counter for rotation
+	keyPoolSize      int
+	
+	// Pre-computed conversation key cache
+	// targetPubkey -> []conversationKey (indexed by ephemeral key index)
+	conversationKeyCache map[string][][]byte
+	cacheMutex          sync.RWMutex
+	
+	// Track which targets have been initialized
+	initializedTargets map[string]bool
 }
 
 // NewKeyManager creates a new key manager
 func NewKeyManager(keysFile string) *KeyManager {
-	return &KeyManager{}
+	km := &KeyManager{
+		conversationKeyCache: make(map[string][][]byte),
+		initializedTargets:  make(map[string]bool),
+	}
+	
+	// Initialize ephemeral key pool
+	km.initializeEphemeralKeyPool()
+	
+	return km
+}
+
+// initializeEphemeralKeyPool pre-generates 5000 ephemeral keypairs for performance
+func (km *KeyManager) initializeEphemeralKeyPool() {
+	km.keyPoolSize = 5000
+	km.ephemeralKeyPool = make([]*nostr.KeyPair, km.keyPoolSize)
+	
+	for i := 0; i < km.keyPoolSize; i++ {
+		privKey := nostr.GeneratePrivateKey()
+		pubKey, err := nostr.GetPublicKey(privKey)
+		if err != nil {
+			panic(fmt.Sprintf("Failed to generate ephemeral key %d: %v", i, err))
+		}
+		km.ephemeralKeyPool[i] = &nostr.KeyPair{
+			PrivateKey: privKey,
+			PublicKey:  pubKey,
+		}
+	}
+	
+	log.Printf("Initialized ephemeral key pool with %d keys", km.keyPoolSize)
+}
+
+// initializeTargetCache pre-computes conversation keys for a specific target
+func (km *KeyManager) initializeTargetCache(targetPubkey string) error {
+	km.cacheMutex.Lock()
+	defer km.cacheMutex.Unlock()
+	
+	// Skip if already initialized
+	if km.initializedTargets[targetPubkey] {
+		return nil
+	}
+	
+	// Initialize conversation key array for this target
+	conversationKeys := make([][]byte, km.keyPoolSize)
+	
+	// Pre-compute all conversation keys
+	for i := 0; i < km.keyPoolSize; i++ {
+		conversationKey, err := nip44.GenerateConversationKey(targetPubkey, km.ephemeralKeyPool[i].PrivateKey)
+		if err != nil {
+			return fmt.Errorf("failed to generate conversation key %d for target %s: %v", i, targetPubkey, err)
+		}
+		conversationKeys[i] = conversationKey
+	}
+	
+	// Cache the conversation keys
+	km.conversationKeyCache[targetPubkey] = conversationKeys
+	km.initializedTargets[targetPubkey] = true
+	
+	log.Printf("Pre-computed %d conversation keys for target %s", km.keyPoolSize, targetPubkey)
+	return nil
+}
+
+// getNextEphemeralKey returns the next ephemeral key with atomic rotation
+func (km *KeyManager) getNextEphemeralKey() (*nostr.KeyPair, int) {
+	index := atomic.AddUint64(&km.keyPoolIndex, 1) % uint64(km.keyPoolSize)
+	return km.ephemeralKeyPool[index], int(index)
+}
+
+// getConversationKey returns a pre-computed conversation key
+func (km *KeyManager) getConversationKey(targetPubkey string, ephemeralKeyIndex int) []byte {
+	km.cacheMutex.RLock()
+	defer km.cacheMutex.RUnlock()
+	
+	return km.conversationKeyCache[targetPubkey][ephemeralKeyIndex]
+}
+
+// ensureTargetInitialized ensures conversation keys are pre-computed for a target
+func (km *KeyManager) ensureTargetInitialized(targetPubkey string) error {
+	km.cacheMutex.RLock()
+	initialized := km.initializedTargets[targetPubkey]
+	km.cacheMutex.RUnlock()
+	
+	if !initialized {
+		return km.initializeTargetCache(targetPubkey)
+	}
+	return nil
 }
 
 // GenerateKeys generates new Nostr keys
@@ -697,7 +795,7 @@ func (km *KeyManager) createEphemeralSeal(rumor *nostr.Event, targetPubkey strin
 		return nil, fmt.Errorf("failed to serialize rumor: %v", err)
 	}
 
-	// Generate conversation key for encryption
+	// Generate conversation key for encryption (sender -> target)
 	conversationKey, err := nip44.GenerateConversationKey(targetPubkey, km.keys.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
@@ -728,12 +826,13 @@ func (km *KeyManager) createEphemeralSeal(rumor *nostr.Event, targetPubkey strin
 
 // createEphemeralGiftWrap creates an ephemeral gift wrap (kind 21059) with encrypted seal
 func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey string) (*nostr.Event, error) {
-	// Generate a random one-time-use keypair for the gift wrap FIRST
-	oneTimePrivKey := nostr.GeneratePrivateKey()
-	oneTimePubKey, err := nostr.GetPublicKey(oneTimePrivKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive one-time public key: %v", err)
+	// Ensure target cache is initialized
+	if err := km.ensureTargetInitialized(targetPubkey); err != nil {
+		return nil, fmt.Errorf("failed to initialize target cache: %v", err)
 	}
+	
+	// Get pre-generated one-time key and its index
+	oneTimeKey, ephemeralKeyIndex := km.getNextEphemeralKey()
 
 	// Serialize seal to JSON
 	sealJSON, err := json.Marshal(seal)
@@ -741,13 +840,10 @@ func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey st
 		return nil, fmt.Errorf("failed to serialize seal: %v", err)
 	}
 
-	// Generate conversation key between one-time key and target (NOT sender and target)
-	conversationKey, err := nip44.GenerateConversationKey(targetPubkey, oneTimePrivKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
-	}
+	// Get pre-computed conversation key (zero computation!)
+	conversationKey := km.getConversationKey(targetPubkey, ephemeralKeyIndex)
 
-	// Encrypt seal using NIP-44 with one-time key conversation
+	// Encrypt seal using NIP-44 with pre-computed conversation key
 	encryptedSeal, err := nip44.Encrypt(string(sealJSON), conversationKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt seal: %v", err)
@@ -761,11 +857,11 @@ func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey st
 		Tags: nostr.Tags{
 			{"p", targetPubkey}, // Tag the recipient
 		},
-		PubKey: oneTimePubKey, // Random one-time-use pubkey
+		PubKey: oneTimeKey.PublicKey, // Pre-generated one-time-use pubkey
 	}
 
-	// Sign the gift wrap with the one-time key
-	if err := giftWrap.Sign(oneTimePrivKey); err != nil {
+	// Sign the gift wrap with the pre-generated private key
+	if err := giftWrap.Sign(oneTimeKey.PrivateKey); err != nil {
 		return nil, fmt.Errorf("failed to sign gift wrap: %v", err)
 	}
 
