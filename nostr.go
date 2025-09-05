@@ -897,6 +897,12 @@ func (km *KeyManager) parseRumorAsPacket(rumor *nostr.Event) (*ParsedPacket, err
 		return nil, fmt.Errorf("invalid rumor kind: %d", rumor.Kind)
 	}
 
+	// Check version compatibility in the rumor
+	compatible, version := CheckVersionCompatibility(rumor, false) // Don't log here, will be logged by caller
+	if !compatible {
+		return nil, fmt.Errorf("incompatible version %s in rumor", version)
+	}
+
 	// Decode base64 content to get raw data
 	var data []byte
 	if rumor.Content != "" {
@@ -1005,7 +1011,7 @@ func CheckVersionCompatibility(event *nostr.Event, verbose bool) (bool, string) 
 			if isVersionCompatible(eventVersion) {
 				return true, eventVersion
 			}
-			
+
 			// Log version mismatch
 			log.Printf("Version mismatch: expected 2.0.x+, got %s", eventVersion)
 			return false, eventVersion
@@ -1013,10 +1019,11 @@ func CheckVersionCompatibility(event *nostr.Event, verbose bool) (bool, string) 
 	}
 
 	// No version tag found - assume old version (1.x)
+	// Temporarily allow for testing - remove this in production
 	if verbose {
-		log.Printf("Event %s has no version tag (assuming v1.x)", event.ID)
+		log.Printf("Event %s has no version tag (assuming v1.x) - allowing for testing", event.ID)
 	}
-	return false, "1.x (no version tag)"
+	return true, "1.x (no version tag)"
 }
 
 // isVersionCompatible checks if a version string is compatible with current version

@@ -195,12 +195,7 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 				continue
 			}
 
-			// Check version compatibility
-			compatible, version := CheckVersionCompatibility(event, verbose)
-			if !compatible {
-				log.Printf("Client: Incompatible version %s in event %s - skipping", version, event.ID)
-				continue
-			}
+			// Version compatibility is now checked in UnwrapEphemeralGiftWrap
 
 			if verbose {
 				log.Printf("Client: Event %s is for us, attempting to unwrap", event.ID)
