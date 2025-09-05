@@ -788,7 +788,6 @@ func (km *KeyManager) createEphemeralRumor(packet *Packet, packetType PacketType
 	return rumor, nil
 }
 
-
 // createEphemeralGiftWrap creates an ephemeral gift wrap (kind 21059) with encrypted rumor
 func (km *KeyManager) createEphemeralGiftWrap(rumor *nostr.Event, targetPubkey string) (*nostr.Event, error) {
 	// Ensure target cache is initialized

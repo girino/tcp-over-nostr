@@ -272,7 +272,8 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 	defer func() { done <- true }()
 
 	sequence := uint64(0) // Server starts its own sequence at 0
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, 32768) // Increased from 4KB to 32KB for better throughput
+	// This reduces the number of Nostr events by 8x, significantly improving performance with remote relays
 
 	for {
 		n, err := targetConn.Read(buffer)

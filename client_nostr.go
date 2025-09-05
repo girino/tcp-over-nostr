@@ -130,7 +130,8 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 
 	// Read data from client connection and send as packets
 	sequence := uint64(1) // Start at 1 (open packet is 0)
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, 32768) // Increased from 4KB to 32KB for better throughput
+	// This reduces the number of Nostr events by 8x, significantly improving performance with remote relays
 
 	for {
 		n, err := conn.Read(buffer)
