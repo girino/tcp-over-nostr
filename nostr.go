@@ -786,7 +786,7 @@ func (km *KeyManager) createEphemeralRumor(packet *Packet, packetType PacketType
 	// Create tags with all metadata
 	tags := nostr.Tags{
 		{"proxy", "tcp"},                          // Identify as TCP proxy traffic
-		{"version", "2.0.0"},                      // Protocol version for compatibility
+		{"version", Version},                      // Protocol version for compatibility
 		{"type", string(packetType)},              // Packet type (open, data, close, etc.)
 		{"session", sessionID},                    // Session identifier
 		{"sequence", fmt.Sprintf("%d", sequence)}, // Sequence number
@@ -1001,22 +1001,27 @@ func CheckVersionCompatibility(event *nostr.Event, verbose bool) (bool, string) 
 				log.Printf("Event %s has version: %s", event.ID, eventVersion)
 			}
 
-			// For now, we only support version 2.0.0
-			// In the future, we can add more sophisticated version checking
-			if eventVersion == "2.0.0" {
+			// Check if version is compatible (2.0.x or higher)
+			if isVersionCompatible(eventVersion) {
 				return true, eventVersion
 			}
-
+			
 			// Log version mismatch
-			log.Printf("Version mismatch: expected 2.0.0, got %s", eventVersion)
+			log.Printf("Version mismatch: expected 2.0.x+, got %s", eventVersion)
 			return false, eventVersion
 		}
 	}
 
 	// No version tag found - assume old version (1.x)
-	// For backward compatibility, allow v1.x events but log a warning
 	if verbose {
-		log.Printf("Event %s has no version tag (assuming v1.x) - allowing for backward compatibility", event.ID)
+		log.Printf("Event %s has no version tag (assuming v1.x)", event.ID)
 	}
-	return true, "1.x (no version tag)"
+	return false, "1.x (no version tag)"
+}
+
+// isVersionCompatible checks if a version string is compatible with current version
+func isVersionCompatible(version string) bool {
+	// Accept any 2.0.x version (with or without v prefix, with or without additional suffixes)
+	// Examples: v2.0.0, 2.0.1, v2.0.1-version-compatibility, etc.
+	return strings.Contains(version, "2.0.") || strings.Contains(version, "v2.0.")
 }
