@@ -969,3 +969,23 @@ func SendNostrPacket(relayHandler *NostrRelayHandler, keyMgr *KeyManager, packet
 
 	return nil
 }
+
+// SendNostrPacketSync sends a packet as an encrypted Nostr event synchronously
+func SendNostrPacketSync(relayHandler *NostrRelayHandler, keyMgr *KeyManager, packet *Packet, targetPubkey string, packetType PacketType, sessionID string, sequence uint64, direction string, targetHost string, targetPort int, clientAddr string, errorMsg string, verbose bool) error {
+	// Create encrypted gift wrapped event for the packet
+	event, err := keyMgr.CreateEphemeralGiftWrappedEvent(packet, targetPubkey, packetType, sessionID, sequence, direction, targetHost, targetPort, clientAddr, errorMsg)
+	if err != nil {
+		return fmt.Errorf("failed to create encrypted Nostr event: %v", err)
+	}
+
+	// Publish event to relay synchronously to ensure order
+	if err := relayHandler.PublishEvent(event); err != nil {
+		return fmt.Errorf("failed to publish Nostr event: %v", err)
+	}
+
+	if verbose {
+		log.Printf("Nostr: Sent encrypted packet (type=%s, session=%s, seq=%d) as gift wrap event %s", packetType, sessionID, sequence, event.ID)
+	}
+
+	return nil
+}

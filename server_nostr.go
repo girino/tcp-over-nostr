@@ -271,7 +271,7 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManager, sessionID, clientPubkey string, targetConn net.Conn, done chan bool, verbose bool) {
 	defer func() { done <- true }()
 
-	sequence := uint64(0) // Server starts its own sequence at 0
+	sequence := uint64(0)         // Server starts its own sequence at 0
 	buffer := make([]byte, 32768) // Increased from 4KB to 32KB for better throughput
 	// This reduces the number of Nostr events by 8x, significantly improving performance with remote relays
 
@@ -299,9 +299,9 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 		}
 	}
 
-	// Send close packet
+	// Send close packet synchronously to ensure proper cleanup
 	closePacket := CreateEmptyPacket()
-	if err := SendNostrPacket(relayHandler, keyMgr, closePacket, clientPubkey, PacketTypeClose, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
+	if err := SendNostrPacketSync(relayHandler, keyMgr, closePacket, clientPubkey, PacketTypeClose, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
 		log.Printf("Server: Session %s - Failed to send encrypted close packet: %v", sessionID, err)
 	}
 

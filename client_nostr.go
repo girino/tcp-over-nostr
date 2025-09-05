@@ -117,9 +117,9 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 		log.Printf("Client: Starting Nostr session %s for %s", sessionID, clientAddr)
 	}
 
-	// Send open packet
+	// Send open packet synchronously to ensure it arrives first
 	openPacket := CreateEmptyPacket()
-	if err := SendNostrPacket(relayHandler, keyMgr, openPacket, serverPubkeyHex, PacketTypeOpen, sessionID, 0, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
+	if err := SendNostrPacketSync(relayHandler, keyMgr, openPacket, serverPubkeyHex, PacketTypeOpen, sessionID, 0, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
 		log.Printf("Client: Failed to send open packet: %v", err)
 		return
 	}
@@ -159,9 +159,9 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 		}
 	}
 
-	// Send close packet
+	// Send close packet synchronously to ensure proper cleanup
 	closePacket := CreateEmptyPacket()
-	if err := SendNostrPacket(relayHandler, keyMgr, closePacket, serverPubkeyHex, PacketTypeClose, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
+	if err := SendNostrPacketSync(relayHandler, keyMgr, closePacket, serverPubkeyHex, PacketTypeClose, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
 		log.Printf("Client: Failed to send close packet: %v", err)
 	}
 
@@ -280,4 +280,3 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 		}
 	}
 }
-
