@@ -204,14 +204,14 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 			return
 		case event := <-eventChan:
 			// Events from this channel are already filtered for this session
-			
+
 			// Check version compatibility
 			compatible, version := CheckVersionCompatibility(event, verbose)
 			if !compatible {
 				log.Printf("Server: Session %s - Incompatible version %s in event %s - skipping", sessionID, version, event.ID)
 				continue
 			}
-			
+
 			parsedPacket, err := keyMgr.UnwrapEphemeralGiftWrap(event)
 			if err != nil {
 				if verbose {
