@@ -2,7 +2,7 @@
 # Builds with embedded version information
 
 BINARY_NAME=tcp-proxy
-VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "unknown")
+VERSION=$(shell grep 'Version.*=' version.go | sed 's/.*Version.*=.*"\(.*\)".*/\1/')
 BUILD_DATE=$(shell date -u '+%Y-%m-%d %H:%M:%S UTC')
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 

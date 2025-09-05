@@ -13,6 +13,9 @@ COPY go.mod go.sum ./
 # Download dependencies
 RUN go mod download
 
+# Copy git directory for commit hash (useful for debugging and support)
+COPY .git .git
+
 # Copy source code
 COPY . .
 
@@ -34,11 +37,6 @@ WORKDIR /app
 
 # Copy binary from builder stage
 COPY --from=builder /app/tcp-proxy /app/tcp-proxy
-
-# Copy example environment files
-COPY --from=builder /app/env.server.example /app/env.server.example
-COPY --from=builder /app/env.client.example /app/env.client.example
-COPY --from=builder /app/ENV_SETUP.md /app/ENV_SETUP.md
 
 # Change ownership to non-root user
 RUN chown -R tcpnostr:tcpnostr /app
