@@ -721,25 +721,20 @@ func IsEventForMe(event *nostr.Event, myPubkey string) bool {
 
 // CreateEphemeralGiftWrappedEvent creates an ephemeral gift wrapped event for secure transmission
 // Uses ephemeral kinds (20000-29999) to ensure events are not stored permanently by relays
+// Now encrypts rumor directly with gift wrap, skipping the seal layer
 func (km *KeyManager) CreateEphemeralGiftWrappedEvent(packet *Packet, targetPubkey string, packetType PacketType, sessionID string, sequence uint64, direction string, targetHost string, targetPort int, clientAddr string, errorMsg string) (*nostr.Event, error) {
 	if km.keys == nil {
 		return nil, fmt.Errorf("keys not loaded")
 	}
 
-	// 1. Create the rumor (unsigned event with kind 20547)
+	// 1. Create the rumor (unsigned event with kind 20547) - now includes sender pubkey
 	rumor, err := km.createEphemeralRumor(packet, packetType, sessionID, sequence, direction, targetHost, targetPort, clientAddr, errorMsg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rumor: %v", err)
 	}
 
-	// 2. Create ephemeral seal (kind 20013) with encrypted rumor
-	seal, err := km.createEphemeralSeal(rumor, targetPubkey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create seal: %v", err)
-	}
-
-	// 3. Create ephemeral gift wrap (kind 21059) with encrypted seal
-	giftWrap, err := km.createEphemeralGiftWrap(seal, targetPubkey)
+	// 2. Create ephemeral gift wrap (kind 21059) with encrypted rumor directly
+	giftWrap, err := km.createEphemeralGiftWrap(rumor, targetPubkey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gift wrap: %v", err)
 	}
@@ -793,45 +788,9 @@ func (km *KeyManager) createEphemeralRumor(packet *Packet, packetType PacketType
 	return rumor, nil
 }
 
-// createEphemeralSeal creates an ephemeral seal (kind 20013) with encrypted rumor
-func (km *KeyManager) createEphemeralSeal(rumor *nostr.Event, targetPubkey string) (*nostr.Event, error) {
-	// Serialize rumor to JSON
-	rumorJSON, err := json.Marshal(rumor)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize rumor: %v", err)
-	}
 
-	// Generate conversation key for encryption (sender -> target)
-	conversationKey, err := nip44.GenerateConversationKey(targetPubkey, km.keys.PrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
-	}
-
-	// Encrypt rumor using NIP-44
-	encryptedRumor, err := nip44.Encrypt(string(rumorJSON), conversationKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt rumor: %v", err)
-	}
-
-	// Create ephemeral seal event (kind 20013 - ephemeral version of kind 13)
-	seal := &nostr.Event{
-		Kind:      20013,          // Ephemeral seal event kind
-		Content:   encryptedRumor, // Encrypted rumor
-		CreatedAt: nostr.Timestamp(time.Now().Unix()),
-		Tags:      nostr.Tags{},      // Tags MUST be empty in seal events
-		PubKey:    km.keys.PublicKey, // Real author's pubkey
-	}
-
-	// Sign the seal
-	if err := seal.Sign(km.keys.PrivateKey); err != nil {
-		return nil, fmt.Errorf("failed to sign seal: %v", err)
-	}
-
-	return seal, nil
-}
-
-// createEphemeralGiftWrap creates an ephemeral gift wrap (kind 21059) with encrypted seal
-func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey string) (*nostr.Event, error) {
+// createEphemeralGiftWrap creates an ephemeral gift wrap (kind 21059) with encrypted rumor
+func (km *KeyManager) createEphemeralGiftWrap(rumor *nostr.Event, targetPubkey string) (*nostr.Event, error) {
 	// Ensure target cache is initialized
 	if err := km.ensureTargetInitialized(targetPubkey); err != nil {
 		return nil, fmt.Errorf("failed to initialize target cache: %v", err)
@@ -840,25 +799,25 @@ func (km *KeyManager) createEphemeralGiftWrap(seal *nostr.Event, targetPubkey st
 	// Get pre-generated one-time key and its index
 	oneTimeKey, ephemeralKeyIndex := km.getNextEphemeralKey()
 
-	// Serialize seal to JSON
-	sealJSON, err := json.Marshal(seal)
+	// Serialize rumor to JSON
+	rumorJSON, err := json.Marshal(rumor)
 	if err != nil {
-		return nil, fmt.Errorf("failed to serialize seal: %v", err)
+		return nil, fmt.Errorf("failed to serialize rumor: %v", err)
 	}
 
 	// Get pre-computed conversation key (zero computation!)
 	conversationKey := km.getConversationKey(targetPubkey, ephemeralKeyIndex)
 
-	// Encrypt seal using NIP-44 with pre-computed conversation key
-	encryptedSeal, err := nip44.Encrypt(string(sealJSON), conversationKey)
+	// Encrypt rumor using NIP-44 with pre-computed conversation key
+	encryptedRumor, err := nip44.Encrypt(string(rumorJSON), conversationKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt seal: %v", err)
+		return nil, fmt.Errorf("failed to encrypt rumor: %v", err)
 	}
 
 	// Create ephemeral gift wrap event (kind 21059 - ephemeral version of kind 1059)
 	giftWrap := &nostr.Event{
-		Kind:      21059,         // Ephemeral gift wrap event kind
-		Content:   encryptedSeal, // Encrypted seal
+		Kind:      21059,          // Ephemeral gift wrap event kind
+		Content:   encryptedRumor, // Encrypted rumor
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Tags: nostr.Tags{
 			{"p", targetPubkey}, // Tag the recipient
@@ -882,31 +841,8 @@ func (km *KeyManager) UnwrapEphemeralGiftWrap(giftWrap *nostr.Event) (*ParsedPac
 		return nil, fmt.Errorf("failed to generate conversation key: %v", err)
 	}
 
-	// Decrypt the seal from the gift wrap
-	sealJSON, err := nip44.Decrypt(giftWrap.Content, conversationKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt seal: %v", err)
-	}
-
-	// Parse the seal
-	var seal nostr.Event
-	if err := json.Unmarshal([]byte(sealJSON), &seal); err != nil {
-		return nil, fmt.Errorf("failed to parse seal: %v", err)
-	}
-
-	// Verify seal signature
-	if ok, _ := seal.CheckSignature(); !ok {
-		return nil, fmt.Errorf("invalid seal signature")
-	}
-
-	// Generate conversation key for rumor decryption
-	rumorConversationKey, err := nip44.GenerateConversationKey(seal.PubKey, km.keys.PrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate rumor conversation key: %v", err)
-	}
-
-	// Decrypt the rumor from the seal
-	rumorJSON, err := nip44.Decrypt(seal.Content, rumorConversationKey)
+	// Decrypt the rumor from the gift wrap
+	rumorJSON, err := nip44.Decrypt(giftWrap.Content, conversationKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt rumor: %v", err)
 	}

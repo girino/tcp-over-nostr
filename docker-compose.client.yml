@@ -11,19 +11,19 @@ services:
     # Port mappings
     ports:
       # Expose client ports
-      - "8080:8080"  # Default client port
+    #  - "8080:8080"  # Default client port
       - "2222:2222"  # Common SSH proxy port
-      - "3000:3000"  # Alternative client port
-      - "5432:5432"  # Database proxy port
+    #  - "3000:3000"  # Alternative client port
+    #  - "5432:5432"  # Database proxy port
     
     # Environment variables (can override .env file)
-    environment:
-      - TON_MODE=client
-      - TON_CLIENT_PORT=8080
-      # TON_SERVER_KEY=npub1...  # Set this from server output
-      - TON_RELAY=wss://relay.damus.io,wss://relay.primal.net,wss://nostr.girino.org
-      - TON_VERBOSE=true
-      # TON_PRIVATE_KEY=nsec1...
+    #environment:
+    #  - TON_MODE=client
+    #  - TON_CLIENT_PORT=8080
+    #  # TON_SERVER_KEY=npub1...  # Set this from server output
+    #  - TON_RELAY=wss://relay.damus.io,wss://relay.primal.net,wss://nostr.girino.org
+    #  - TON_VERBOSE=true
+    #  # TON_PRIVATE_KEY=nsec1...
     
     # Health check
     healthcheck:
