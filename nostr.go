@@ -786,6 +786,7 @@ func (km *KeyManager) createEphemeralRumor(packet *Packet, packetType PacketType
 	// Create tags with all metadata
 	tags := nostr.Tags{
 		{"proxy", "tcp"},                          // Identify as TCP proxy traffic
+		{"version", "2.0.0"},                      // Protocol version for compatibility
 		{"type", string(packetType)},              // Packet type (open, data, close, etc.)
 		{"session", sessionID},                    // Session identifier
 		{"sequence", fmt.Sprintf("%d", sequence)}, // Sequence number
@@ -988,4 +989,33 @@ func SendNostrPacketSync(relayHandler *NostrRelayHandler, keyMgr *KeyManager, pa
 	}
 
 	return nil
+}
+
+// CheckVersionCompatibility checks if the event version is compatible
+func CheckVersionCompatibility(event *nostr.Event, verbose bool) (bool, string) {
+	// Look for version tag
+	for _, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == "version" {
+			eventVersion := tag[1]
+			if verbose {
+				log.Printf("Event %s has version: %s", event.ID, eventVersion)
+			}
+			
+			// For now, we only support version 2.0.0
+			// In the future, we can add more sophisticated version checking
+			if eventVersion == "2.0.0" {
+				return true, eventVersion
+			}
+			
+			// Log version mismatch
+			log.Printf("Version mismatch: expected 2.0.0, got %s", eventVersion)
+			return false, eventVersion
+		}
+	}
+	
+	// No version tag found - assume old version (1.x)
+	if verbose {
+		log.Printf("Event %s has no version tag (assuming v1.x)", event.ID)
+	}
+	return false, "1.x (no version tag)"
 }

@@ -81,6 +81,13 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 				continue
 			}
 
+			// Check version compatibility
+			compatible, version := CheckVersionCompatibility(event, verbose)
+			if !compatible {
+				log.Printf("Server: Incompatible version %s in event %s - skipping", version, event.ID)
+				continue
+			}
+
 			// Parse encrypted gift wrapped event
 			parsedPacket, err := keyMgr.UnwrapEphemeralGiftWrap(event)
 			if err != nil {
@@ -197,6 +204,14 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 			return
 		case event := <-eventChan:
 			// Events from this channel are already filtered for this session
+			
+			// Check version compatibility
+			compatible, version := CheckVersionCompatibility(event, verbose)
+			if !compatible {
+				log.Printf("Server: Session %s - Incompatible version %s in event %s - skipping", sessionID, version, event.ID)
+				continue
+			}
+			
 			parsedPacket, err := keyMgr.UnwrapEphemeralGiftWrap(event)
 			if err != nil {
 				if verbose {
