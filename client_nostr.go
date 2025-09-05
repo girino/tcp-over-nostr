@@ -129,7 +129,7 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 	go readServerNostrResponses(relayHandler, keyMgr, sessionID, clientPubkey, conn, done, verbose)
 
 	// Read data from client connection and send as packets
-	sequence := uint64(1) // Start at 1 (open packet is 0)
+	sequence := uint64(1)         // Start at 1 (open packet is 0)
 	buffer := make([]byte, 32768) // Increased from 4KB to 32KB for better throughput
 	// This reduces the number of Nostr events by 8x, significantly improving performance with remote relays
 
@@ -288,10 +288,8 @@ func sendNostrPacket(relayHandler *NostrRelayHandler, keyMgr *KeyManager, packet
 		return fmt.Errorf("failed to create encrypted Nostr event: %v", err)
 	}
 
-	// Publish event to relay
-	if err := relayHandler.PublishEvent(event); err != nil {
-		return fmt.Errorf("failed to publish Nostr event: %v", err)
-	}
+	// Publish event to relay asynchronously for better performance
+	relayHandler.PublishEventAsync(event)
 
 	if verbose {
 		log.Printf("Nostr: Sent encrypted packet (type=%s, session=%s, seq=%d) as gift wrap event %s", packetType, sessionID, sequence, event.ID)

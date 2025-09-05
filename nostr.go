@@ -541,6 +541,39 @@ func (nrh *NostrRelayHandler) PublishEvent(event *nostr.Event) error {
 	return nil
 }
 
+// PublishEventAsync publishes a Nostr event asynchronously without blocking
+func (nrh *NostrRelayHandler) PublishEventAsync(event *nostr.Event) {
+	go func() {
+		// Use the pool's PublishMany method which handles multiple relays automatically
+		results := nrh.pool.PublishMany(nrh.ctx, nrh.relayURLs, *event)
+
+		successCount := 0
+		var errors []string
+
+		for result := range results {
+			if result.Error != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
+				if nrh.verbose {
+					log.Printf("Failed to publish event %s to relay %s: %v", event.ID, result.RelayURL, result.Error)
+				}
+			} else {
+				successCount++
+				if nrh.verbose {
+					log.Printf("Published event %s to relay %s", event.ID, result.RelayURL)
+				}
+			}
+		}
+
+		if successCount == 0 {
+			if nrh.verbose {
+				log.Printf("Failed to publish event %s to any relay: %v", event.ID, errors)
+			}
+		} else if len(errors) > 0 && nrh.verbose {
+			log.Printf("Published event %s to %d/%d relays, errors: %v", event.ID, successCount, len(nrh.relayURLs), errors)
+		}
+	}()
+}
+
 // SubscribeToEvents subscribes to events for a specific pubkey using the pool
 func (nrh *NostrRelayHandler) SubscribeToEvents(targetPubkey string) error {
 	// Create subscription filter
