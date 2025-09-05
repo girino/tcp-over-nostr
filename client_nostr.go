@@ -128,36 +128,9 @@ func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler,
 	done := make(chan bool, 2)
 	go readServerNostrResponses(relayHandler, keyMgr, sessionID, clientPubkey, conn, done, verbose)
 
-	// Read data from client connection and send as packets
-	sequence := uint64(1)         // Start at 1 (open packet is 0)
-	buffer := make([]byte, 32768) // Increased from 4KB to 32KB for better throughput
-	// This reduces the number of Nostr events by 8x, significantly improving performance with remote relays
-
-	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			if err != io.EOF {
-				if verbose {
-					log.Printf("Client: Session %s - Connection read error: %v", sessionID, err)
-				}
-			}
-			break
-		}
-
-		if n > 0 {
-			// Create data packet
-			dataPacket := CreateDataPacket(buffer[:n])
-			if err := SendNostrPacket(relayHandler, keyMgr, dataPacket, serverPubkeyHex, PacketTypeData, sessionID, sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
-				log.Printf("Client: Failed to send data packet: %v", err)
-				break
-			}
-
-			if verbose {
-				log.Printf("Client: Session %s - Sent %d bytes in packet (seq %d)", sessionID, n, sequence)
-			}
-			sequence++
-		}
-	}
+	// Read data from client connection with batching for better performance
+	sequence := uint64(1) // Start at 1 (open packet is 0)
+	readClientDataWithBatching(conn, relayHandler, keyMgr, serverPubkeyHex, sessionID, &sequence, clientAddr, verbose)
 
 	// Send close packet synchronously to ensure proper cleanup
 	closePacket := CreateEmptyPacket()
@@ -279,4 +252,95 @@ func readServerNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 			}
 		}
 	}
+}
+
+// readClientDataWithBatching reads data from client connection with intelligent batching
+func readClientDataWithBatching(conn net.Conn, relayHandler *NostrRelayHandler, keyMgr *KeyManager, serverPubkeyHex, sessionID string, sequence *uint64, clientAddr string, verbose bool) {
+	const (
+		maxBatchSize = 16384 // 16KB batch size
+		batchTimeout = 50 * time.Millisecond
+	)
+	
+	buffer := make([]byte, 32768) // 32KB read buffer
+	batchBuffer := make([]byte, 0, maxBatchSize) // Batch accumulation buffer
+	timer := time.NewTimer(batchTimeout)
+	timer.Stop() // Start stopped
+	
+	defer timer.Stop()
+	
+	for {
+		// Set read deadline to allow for batching
+		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		
+		n, err := conn.Read(buffer)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// Timeout - send any accumulated data
+				if len(batchBuffer) > 0 {
+					sendBatchedData(relayHandler, keyMgr, serverPubkeyHex, sessionID, sequence, batchBuffer, clientAddr, verbose)
+					batchBuffer = batchBuffer[:0] // Reset buffer
+				}
+				continue
+			}
+			
+			if err != io.EOF {
+				if verbose {
+					log.Printf("Client: Session %s - Connection read error: %v", sessionID, err)
+				}
+			}
+			break
+		}
+		
+		if n > 0 {
+			// Add data to batch
+			batchBuffer = append(batchBuffer, buffer[:n]...)
+			
+			// Start timer if this is the first data in batch
+			if len(batchBuffer) == n {
+				timer.Reset(batchTimeout)
+			}
+			
+			// Send batch if it's full
+			if len(batchBuffer) >= maxBatchSize {
+				sendBatchedData(relayHandler, keyMgr, serverPubkeyHex, sessionID, sequence, batchBuffer, clientAddr, verbose)
+				batchBuffer = batchBuffer[:0] // Reset buffer
+				timer.Stop()
+			}
+		}
+		
+		// Check for timeout
+		select {
+		case <-timer.C:
+			if len(batchBuffer) > 0 {
+				sendBatchedData(relayHandler, keyMgr, serverPubkeyHex, sessionID, sequence, batchBuffer, clientAddr, verbose)
+				batchBuffer = batchBuffer[:0] // Reset buffer
+			}
+		default:
+			// Continue reading
+		}
+	}
+	
+	// Send any remaining data
+	if len(batchBuffer) > 0 {
+		sendBatchedData(relayHandler, keyMgr, serverPubkeyHex, sessionID, sequence, batchBuffer, clientAddr, verbose)
+	}
+}
+
+// sendBatchedData sends accumulated data as a single packet
+func sendBatchedData(relayHandler *NostrRelayHandler, keyMgr *KeyManager, serverPubkeyHex, sessionID string, sequence *uint64, data []byte, clientAddr string, verbose bool) {
+	if len(data) == 0 {
+		return
+	}
+	
+	// Create data packet with batched data
+	dataPacket := CreateDataPacket(data)
+	if err := SendNostrPacket(relayHandler, keyMgr, dataPacket, serverPubkeyHex, PacketTypeData, sessionID, *sequence, "client_to_server", "", 0, clientAddr, "", verbose); err != nil {
+		log.Printf("Client: Failed to send batched data packet: %v", err)
+		return
+	}
+	
+	if verbose {
+		log.Printf("Client: Session %s - Sent %d bytes in batched packet (seq %d)", sessionID, len(data), *sequence)
+	}
+	*sequence++
 }
