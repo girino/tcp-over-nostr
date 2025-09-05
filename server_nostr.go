@@ -287,7 +287,7 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 		if n > 0 {
 			// Create data packet
 			dataPacket := CreateDataPacket(buffer[:n])
-			if err := sendNostrPacket(relayHandler, keyMgr, dataPacket, clientPubkey, PacketTypeData, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
+			if err := SendNostrPacket(relayHandler, keyMgr, dataPacket, clientPubkey, PacketTypeData, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
 				log.Printf("Server: Session %s - Failed to send encrypted data packet: %v", sessionID, err)
 				break
 			}
@@ -301,7 +301,7 @@ func readTargetNostrResponses(relayHandler *NostrRelayHandler, keyMgr *KeyManage
 
 	// Send close packet
 	closePacket := CreateEmptyPacket()
-	if err := sendNostrPacket(relayHandler, keyMgr, closePacket, clientPubkey, PacketTypeClose, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
+	if err := SendNostrPacket(relayHandler, keyMgr, closePacket, clientPubkey, PacketTypeClose, sessionID, sequence, "server_to_client", "", 0, "", "", verbose); err != nil {
 		log.Printf("Server: Session %s - Failed to send encrypted close packet: %v", sessionID, err)
 	}
 

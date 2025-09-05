@@ -951,3 +951,21 @@ func (km *KeyManager) parseRumorAsPacket(rumor *nostr.Event) (*ParsedPacket, err
 
 	return parsed, nil
 }
+
+// SendNostrPacket sends a packet as an encrypted Nostr event asynchronously
+func SendNostrPacket(relayHandler *NostrRelayHandler, keyMgr *KeyManager, packet *Packet, targetPubkey string, packetType PacketType, sessionID string, sequence uint64, direction string, targetHost string, targetPort int, clientAddr string, errorMsg string, verbose bool) error {
+	// Create encrypted gift wrapped event for the packet
+	event, err := keyMgr.CreateEphemeralGiftWrappedEvent(packet, targetPubkey, packetType, sessionID, sequence, direction, targetHost, targetPort, clientAddr, errorMsg)
+	if err != nil {
+		return fmt.Errorf("failed to create encrypted Nostr event: %v", err)
+	}
+
+	// Publish event to relay asynchronously for better performance
+	relayHandler.PublishEventAsync(event)
+
+	if verbose {
+		log.Printf("Nostr: Sent encrypted packet (type=%s, session=%s, seq=%d) as gift wrap event %s", packetType, sessionID, sequence, event.ID)
+	}
+
+	return nil
+}
