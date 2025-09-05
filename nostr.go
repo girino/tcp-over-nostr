@@ -456,6 +456,10 @@ type NostrRelayHandler struct {
 	cancel    context.CancelFunc
 	eventChan chan *nostr.Event // Channel for received events
 	mu        sync.RWMutex      // Protects shared state
+	
+	// Connection health monitoring
+	relayHealth map[string]bool // Track relay health status
+	healthMutex sync.RWMutex    // Protects health status
 }
 
 // NewNostrRelayHandler creates a new Nostr relay handler with multiple relays
@@ -486,20 +490,75 @@ func NewNostrRelayHandler(relayURLs []string, keyMgr *KeyManager, verbose bool) 
 	}
 
 	handler := &NostrRelayHandler{
-		pool:      pool,
-		relayURLs: relayURLs,
-		keyMgr:    keyMgr,
-		verbose:   verbose,
-		ctx:       ctx,
-		cancel:    cancel,
-		eventChan: make(chan *nostr.Event, 100), // Buffered channel
+		pool:        pool,
+		relayURLs:   relayURLs,
+		keyMgr:      keyMgr,
+		verbose:     verbose,
+		ctx:         ctx,
+		cancel:      cancel,
+		eventChan:   make(chan *nostr.Event, 100), // Buffered channel
+		relayHealth: make(map[string]bool),         // Initialize health tracking
 	}
 
 	if verbose {
 		log.Printf("Created pool with %d relay(s): %v", pool.Relays.Size(), relayURLs)
 	}
 
+	// Initialize all relays as healthy
+	for _, relayURL := range relayURLs {
+		handler.relayHealth[relayURL] = true
+	}
+
 	return handler, nil
+}
+
+// GetHealthyRelays returns a list of currently healthy relay URLs
+func (nrh *NostrRelayHandler) GetHealthyRelays() []string {
+	nrh.healthMutex.RLock()
+	defer nrh.healthMutex.RUnlock()
+	
+	var healthy []string
+	for relayURL, isHealthy := range nrh.relayHealth {
+		if isHealthy {
+			healthy = append(healthy, relayURL)
+		}
+	}
+	return healthy
+}
+
+// MarkRelayUnhealthy marks a relay as unhealthy
+func (nrh *NostrRelayHandler) MarkRelayUnhealthy(relayURL string) {
+	nrh.healthMutex.Lock()
+	defer nrh.healthMutex.Unlock()
+	
+	nrh.relayHealth[relayURL] = false
+	if nrh.verbose {
+		log.Printf("Marked relay %s as unhealthy", relayURL)
+	}
+}
+
+// MarkRelayHealthy marks a relay as healthy
+func (nrh *NostrRelayHandler) MarkRelayHealthy(relayURL string) {
+	nrh.healthMutex.Lock()
+	defer nrh.healthMutex.Unlock()
+	
+	nrh.relayHealth[relayURL] = true
+	if nrh.verbose {
+		log.Printf("Marked relay %s as healthy", relayURL)
+	}
+}
+
+// GetRelayHealthStatus returns the health status of all relays
+func (nrh *NostrRelayHandler) GetRelayHealthStatus() map[string]bool {
+	nrh.healthMutex.RLock()
+	defer nrh.healthMutex.RUnlock()
+	
+	// Return a copy to avoid race conditions
+	status := make(map[string]bool)
+	for relayURL, isHealthy := range nrh.relayHealth {
+		status[relayURL] = isHealthy
+	}
+	return status
 }
 
 // Close closes all relay connections and cleanup resources
@@ -519,11 +578,15 @@ func (nrh *NostrRelayHandler) PublishEvent(event *nostr.Event) error {
 	for result := range results {
 		if result.Error != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
+			// Mark relay as unhealthy on error
+			nrh.MarkRelayUnhealthy(result.RelayURL)
 			if nrh.verbose {
 				log.Printf("Failed to publish event %s to relay %s: %v", event.ID, result.RelayURL, result.Error)
 			}
 		} else {
 			successCount++
+			// Mark relay as healthy on success
+			nrh.MarkRelayHealthy(result.RelayURL)
 			if nrh.verbose {
 				log.Printf("Published event %s to relay %s", event.ID, result.RelayURL)
 			}
@@ -553,11 +616,15 @@ func (nrh *NostrRelayHandler) PublishEventAsync(event *nostr.Event) {
 		for result := range results {
 			if result.Error != nil {
 				errors = append(errors, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
+				// Mark relay as unhealthy on error
+				nrh.MarkRelayUnhealthy(result.RelayURL)
 				if nrh.verbose {
 					log.Printf("Failed to publish event %s to relay %s: %v", event.ID, result.RelayURL, result.Error)
 				}
 			} else {
 				successCount++
+				// Mark relay as healthy on success
+				nrh.MarkRelayHealthy(result.RelayURL)
 				if nrh.verbose {
 					log.Printf("Published event %s to relay %s", event.ID, result.RelayURL)
 				}
