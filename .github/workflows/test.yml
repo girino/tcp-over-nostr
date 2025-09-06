@@ -51,17 +51,29 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Set coverage filename
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "COVERAGE_FILE=coverage_windows.out" >> $GITHUB_ENV
+          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            echo "COVERAGE_FILE=coverage_ubuntu.out" >> $GITHUB_ENV
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            echo "COVERAGE_FILE=coverage_macos.out" >> $GITHUB_ENV
+          else
+            echo "COVERAGE_FILE=coverage_${{ matrix.os }}.out" >> $GITHUB_ENV
+          fi
+
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage_${{ matrix.os }}.out ./...
+        run: go test -v -race -coverprofile=${{ env.COVERAGE_FILE }} ./...
 
       - name: Run tests with coverage
-        run: go test -v -coverprofile=coverage_${{ matrix.os }}.out -covermode=atomic ./...
+        run: go test -v -coverprofile=${{ env.COVERAGE_FILE }} -covermode=atomic ./...
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os }}-go${{ matrix.go-version }}
-          path: coverage_${{ matrix.os }}.out
+          path: ${{ env.COVERAGE_FILE }}
           retention-days: 30
 
   lint:
