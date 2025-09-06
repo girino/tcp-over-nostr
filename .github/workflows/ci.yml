@@ -184,6 +184,7 @@ jobs:
           
           # Verify the binary was created
           ls -la ${{ env.BINARY_NAME }}${{ matrix.goos == 'windows' && '.exe' || '' }}
+        shell: bash
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
