@@ -214,7 +214,7 @@ jobs:
       - name: Run Gosec Security Scanner
         uses: securego/gosec@master
         with:
-          args: '-fmt=sarif -out=gosec.sarif -verbose ./...'
+          args: '-fmt=sarif -out=gosec.sarif ./...'
 
       - name: Check SARIF file
         run: |
