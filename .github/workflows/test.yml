@@ -89,6 +89,7 @@ jobs:
             gofmt -s -l .
             exit 1
           fi
+        shell: bash
 
       - name: Run go vet
         run: go vet ./...
@@ -127,6 +128,7 @@ jobs:
             echo "SARIF file not found"
             exit 1
           fi
+        shell: bash
 
       - name: Upload Gosec results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
@@ -187,6 +189,7 @@ jobs:
             echo "Binary not found"
             exit 1
           fi
+        shell: bash
 
       - name: Test version information
         run: |
@@ -197,6 +200,7 @@ jobs:
           if command -v strings >/dev/null 2>&1; then
             strings tcp-proxy | grep -E "(v[0-9]+\.[0-9]+\.[0-9]+|Version|BuildDate|GitCommit)" || echo "Version info not found in binary"
           fi
+        shell: bash
 
   integration-test:
     name: Integration Test
@@ -229,6 +233,7 @@ jobs:
           
           # Test that the binary runs without errors
           timeout 5s ./tcp-proxy || echo "Binary test completed (timeout expected)"
+        shell: bash
 
   coverage-report:
     name: Coverage Report
