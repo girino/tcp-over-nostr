@@ -20,7 +20,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            coverage-file: coverage_ubuntu.out
+          - os: windows-latest
+            coverage-file: coverage_windows.out
+          - os: macos-latest
+            coverage-file: coverage_macos.out
         go-version: ['1.24', '1.23']
 
     steps:
@@ -51,30 +57,17 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Set coverage filename
-        run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            echo "COVERAGE_FILE=coverage_windows.out" >> $GITHUB_ENV
-          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            echo "COVERAGE_FILE=coverage_ubuntu.out" >> $GITHUB_ENV
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            echo "COVERAGE_FILE=coverage_macos.out" >> $GITHUB_ENV
-          else
-            echo "COVERAGE_FILE=coverage_${{ matrix.os }}.out" >> $GITHUB_ENV
-          fi
-        shell: bash
-
       - name: Run tests
-        run: go test -v -race -coverprofile=${{ env.COVERAGE_FILE }} ./...
+        run: go test -v -race -coverprofile=${{ matrix.coverage-file }} ./...
 
       - name: Run tests with coverage
-        run: go test -v -coverprofile=${{ env.COVERAGE_FILE }} -covermode=atomic ./...
+        run: go test -v -coverprofile=${{ matrix.coverage-file }} -covermode=atomic ./...
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os }}-go${{ matrix.go-version }}
-          path: ${{ env.COVERAGE_FILE }}
+          path: ${{ matrix.coverage-file }}
           retention-days: 30
 
   lint:
