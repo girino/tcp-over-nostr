@@ -48,16 +48,16 @@ jobs:
         run: go mod verify
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage-${{ matrix.os }}.out ./...
+        run: go test -v -race -coverprofile=coverage_${{ matrix.os }}.out ./...
 
       - name: Run tests with coverage
-        run: go test -v -coverprofile=coverage-${{ matrix.os }}.out -covermode=atomic ./...
+        run: go test -v -coverprofile=coverage_${{ matrix.os }}.out -covermode=atomic ./...
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os }}-go${{ matrix.go-version }}
-          path: coverage-${{ matrix.os }}.out
+          path: coverage_${{ matrix.os }}.out
           retention-days: 30
 
   lint:
@@ -229,7 +229,7 @@ jobs:
           echo "mode: atomic" > combined-coverage.out
           
           # Find all coverage files and append them (skipping the mode line)
-          find coverage-reports -name "coverage-*.out" -exec grep -h -v "^mode:" {} \; >> combined-coverage.out || true
+          find coverage-reports -name "coverage_*.out" -exec grep -h -v "^mode:" {} \; >> combined-coverage.out || true
           
           # Generate HTML coverage report
           go tool cover -html=combined-coverage.out -o coverage.html
