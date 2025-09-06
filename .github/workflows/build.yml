@@ -149,16 +149,13 @@ jobs:
           BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           GIT_COMMIT=$(git rev-parse --short HEAD)
           
-          # Build with version information
-          LDFLAGS="-ldflags \"-X 'main.Version=$VERSION' -X 'main.BuildDate=$BUILD_DATE' -X 'main.GitCommit=$GIT_COMMIT'\""
-          
           # Set environment variables for cross-compilation
           export GOOS=${{ matrix.goos }}
           export GOARCH=${{ matrix.goarch }}
           export CGO_ENABLED=0
           
-          # Build the binary
-          go build $LDFLAGS -o ${{ env.BINARY_NAME }}${{ matrix.ext }}
+          # Build the binary with version information
+          go build -ldflags "-X 'main.Version=$VERSION' -X 'main.BuildDate=$BUILD_DATE' -X 'main.GitCommit=$GIT_COMMIT'" -o ${{ env.BINARY_NAME }}${{ matrix.ext }}
           
           # Verify the binary was created
           ls -la ${{ env.BINARY_NAME }}${{ matrix.ext }}
