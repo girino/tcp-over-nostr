@@ -1,0 +1,29 @@
+name: Workflow Status
+
+on:
+  workflow_run:
+    workflows: ["CI", "Build", "Test"]
+    types: [completed]
+
+jobs:
+  status:
+    name: Update Status
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion != 'skipped'
+    
+    steps:
+      - name: Check workflow results
+        run: |
+          echo "Workflow: ${{ github.event.workflow_run.name }}"
+          echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
+          echo "Status: ${{ github.event.workflow_run.status }}"
+          
+          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+            echo "✅ Workflow completed successfully"
+          elif [ "${{ github.event.workflow_run.conclusion }}" = "failure" ]; then
+            echo "❌ Workflow failed"
+          elif [ "${{ github.event.workflow_run.conclusion }}" = "cancelled" ]; then
+            echo "⏹️ Workflow was cancelled"
+          else
+            echo "⚠️ Workflow completed with status: ${{ github.event.workflow_run.conclusion }}"
+          fi

@@ -1,0 +1,241 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.24'
+  BINARY_NAME: 'tcp-proxy'
+
+jobs:
+  # Quick validation job that runs first
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    outputs:
+      should-run-tests: ${{ steps.changes.outputs.should-run-tests }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes
+        id: changes
+        run: |
+          # Check if this is a pull request and what files changed
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Get changed files
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }})
+            echo "Changed files: $CHANGED_FILES"
+            
+            # Check if Go files or workflow files changed
+            if echo "$CHANGED_FILES" | grep -E '\.(go|mod|sum)$|\.github/workflows/|Dockerfile|Makefile'; then
+              echo "should-run-tests=true" >> $GITHUB_OUTPUT
+            else
+              echo "should-run-tests=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "should-run-tests=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate Go module
+        if: steps.changes.outputs.should-run-tests == 'true'
+        run: |
+          go mod verify
+          go mod tidy
+          git diff --exit-code go.mod go.sum || (echo "go.mod or go.sum is not tidy" && exit 1)
+
+  # Fast linting job
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: validate
+    if: needs.validate.outputs.should-run-tests == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m --fast
+
+  # Fast test job
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [validate, lint]
+    if: needs.validate.outputs.should-run-tests == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race -short ./...
+
+  # Build job for main platforms
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    needs: [validate, lint, test]
+    if: needs.validate.outputs.should-run-tests == 'true'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build binary
+        run: |
+          # Get version information
+          VERSION=$(grep 'Version.*=' version.go | sed 's/.*Version.*=.*"\(.*\)".*/\1/')
+          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          
+          # Build with version information
+          LDFLAGS="-ldflags \"-X 'main.Version=$VERSION' -X 'main.BuildDate=$BUILD_DATE' -X 'main.GitCommit=$GIT_COMMIT'\""
+          
+          # Set environment variables for cross-compilation
+          export GOOS=${{ matrix.goos }}
+          export GOARCH=${{ matrix.goarch }}
+          export CGO_ENABLED=0
+          
+          # Build the binary
+          go build $LDFLAGS -o ${{ env.BINARY_NAME }}${{ matrix.goos == 'windows' && '.exe' || '' }}
+          
+          # Verify the binary was created
+          ls -la ${{ env.BINARY_NAME }}${{ matrix.goos == 'windows' && '.exe' || '' }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ env.BINARY_NAME }}${{ matrix.goos == 'windows' && '.exe' || '' }}
+          retention-days: 7
+
+
+  # Security scan
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [validate]
+    if: needs.validate.outputs.should-run-tests == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run Gosec Security Scanner
+        uses: securecodewarrior/github-action-gosec@master
+        with:
+          args: '-fmt sarif -out gosec.sarif ./...'
+
+      - name: Upload Gosec results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec.sarif
+
+  # Summary job
+  summary:
+    name: Summary
+    runs-on: ubuntu-latest
+    needs: [validate, lint, test, build, security]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "Validation: ${{ needs.validate.result }}"
+          echo "Lint: ${{ needs.lint.result }}"
+          echo "Test: ${{ needs.test.result }}"
+          echo "Build: ${{ needs.build.result }}"
+          echo "Security: ${{ needs.security.result }}"
+          
+          if [ "${{ needs.validate.result }}" != "success" ] || [ "${{ needs.lint.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.build.result }}" != "success" ]; then
+            echo "Some jobs failed"
+            exit 1
+          fi
+          
+          echo "All jobs passed successfully!"

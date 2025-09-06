@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  BINARY_NAME: 'tcp-proxy'
+  GO_VERSION: '1.24'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git commit hash
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build binaries for all platforms
+        run: |
+          # Get version information
+          VERSION=${{ steps.version.outputs.version }}
+          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          
+          # Create release directory
+          mkdir -p release
+          
+          # Define platforms to build for
+          platforms=(
+            "linux/amd64"
+            "linux/arm64"
+            "linux/386"
+            "linux/arm"
+            "windows/amd64"
+            "windows/386"
+            "windows/arm64"
+            "darwin/amd64"
+            "darwin/arm64"
+          )
+          
+          # Build for each platform
+          for platform in "${platforms[@]}"; do
+            IFS='/' read -r goos goarch <<< "$platform"
+            
+            # Set environment variables for cross-compilation
+            export GOOS=$goos
+            export GOARCH=$goarch
+            export CGO_ENABLED=0
+            
+            # Determine file extension
+            ext=""
+            if [ "$goos" = "windows" ]; then
+              ext=".exe"
+            fi
+            
+            # Build the binary
+            echo "Building for $goos/$goarch..."
+            go build -ldflags "-X 'main.Version=$VERSION' -X 'main.BuildDate=$BUILD_DATE' -X 'main.GitCommit=$GIT_COMMIT'" -o "release/${{ env.BINARY_NAME }}-$goos-$goarch$ext"
+          done
+          
+          # List built binaries
+          ls -la release/
+
+      - name: Create checksums
+        run: |
+          cd release
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create release notes
+        id: release_notes
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          
+          cat > release_notes.md << EOF
+          # TCP-over-Nostr $VERSION
+          
+          ## What's Changed
+          
+          This release includes the following changes:
+          - Built from commit: \`$GIT_COMMIT\`
+          - Build date: $BUILD_DATE
+          - Go version: ${{ env.GO_VERSION }}
+          
+          ## Downloads
+          
+          ### Binaries
+          
+          | Platform | Architecture | Download |
+          |----------|-------------|----------|
+          | Linux | amd64 | \`${{ env.BINARY_NAME }}-linux-amd64\` |
+          | Linux | arm64 | \`${{ env.BINARY_NAME }}-linux-arm64\` |
+          | Linux | 386 | \`${{ env.BINARY_NAME }}-linux-386\` |
+          | Linux | arm | \`${{ env.BINARY_NAME }}-linux-arm\` |
+          | Windows | amd64 | \`${{ env.BINARY_NAME }}-windows-amd64.exe\` |
+          | Windows | 386 | \`${{ env.BINARY_NAME }}-windows-386.exe\` |
+          | Windows | arm64 | \`${{ env.BINARY_NAME }}-windows-arm64.exe\` |
+          | macOS | amd64 | \`${{ env.BINARY_NAME }}-darwin-amd64\` |
+          | macOS | arm64 | \`${{ env.BINARY_NAME }}-darwin-arm64\` |
+          
+          ### Verification
+          
+          All binaries are signed and can be verified using the provided checksums:
+          
+          \`\`\`bash
+          # Verify checksums
+          sha256sum -c checksums.txt
+          \`\`\`
+          
+          ## Installation
+          
+          ### From Binary
+          
+          1. Download the appropriate binary for your platform
+          2. Make it executable: \`chmod +x ${{ env.BINARY_NAME }}-<platform>\`
+          3. Move to your PATH: \`sudo mv ${{ env.BINARY_NAME }}-<platform> /usr/local/bin/${{ env.BINARY_NAME }}\`
+          
+          
+          ## Usage
+          
+          See the [README](https://github.com/${{ github.repository }}) for usage instructions.
+          EOF
+          
+          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+          cat release_notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: TCP-over-Nostr ${{ steps.version.outputs.version }}
+          body: ${{ steps.release_notes.outputs.release_notes }}
+          files: |
+            release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Update version.go
+        if: github.event_name == 'push'
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          # Update version.go with the new version
+          sed -i "s/Version.*=.*\".*\"/Version   = \"$VERSION\"/" version.go
+          
+          # Commit and push the version update
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add version.go
+          git commit -m "Update version to $VERSION" || exit 0
+          git push

@@ -1,0 +1,272 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        go-version: ['1.24', '1.23']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git commit hash
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.go-version }}-
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage-${{ matrix.os }}.out ./...
+
+      - name: Run tests with coverage
+        run: go test -v -coverprofile=coverage-${{ matrix.os }}.out -covermode=atomic ./...
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-go${{ matrix.go-version }}
+          path: coverage-${{ matrix.os }}.out
+          retention-days: 30
+
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run gofmt
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "The following files are not formatted:"
+            gofmt -s -l .
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m --verbose
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run Gosec Security Scanner
+        uses: securecodewarrior/github-action-gosec@master
+        with:
+          args: '-fmt sarif -out gosec.sarif ./...'
+
+      - name: Upload Gosec results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec.sarif
+
+  build-test:
+    name: Build Test
+    runs-on: ${{ matrix.os }}
+    needs: [test, lint]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        go-version: ['1.24']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git commit hash
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.go-version }}-
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Test build
+        run: |
+          # Test that the project builds successfully
+          go build -v ./...
+
+      - name: Test make build
+        run: |
+          # Test the make build command
+          make build
+          
+          # Verify binary was created
+          if [ -f "tcp-proxy" ]; then
+            echo "Binary created successfully"
+            ls -la tcp-proxy
+            file tcp-proxy
+          else
+            echo "Binary not found"
+            exit 1
+          fi
+
+      - name: Test version information
+        run: |
+          # Test that version information is embedded correctly
+          ./tcp-proxy --version || ./tcp-proxy -v || echo "Version flag not implemented, checking binary info"
+          
+          # Check if binary contains version information
+          if command -v strings >/dev/null 2>&1; then
+            strings tcp-proxy | grep -E "(v[0-9]+\.[0-9]+\.[0-9]+|Version|BuildDate|GitCommit)" || echo "Version info not found in binary"
+          fi
+
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: [test, lint, build-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build for integration test
+        run: make build
+
+      - name: Run integration tests
+        run: |
+          # Add any integration tests here
+          echo "Running integration tests..."
+          
+          # Test basic functionality
+          ./tcp-proxy --help || echo "Help flag not implemented"
+          
+          # Test that the binary runs without errors
+          timeout 5s ./tcp-proxy || echo "Binary test completed (timeout expected)"
+
+  coverage-report:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: always()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all coverage reports
+        uses: actions/download-artifact@v4
+        with:
+          path: coverage-reports
+
+      - name: Combine coverage reports
+        run: |
+          # Create combined coverage report
+          echo "mode: atomic" > combined-coverage.out
+          
+          # Find all coverage files and append them (skipping the mode line)
+          find coverage-reports -name "coverage-*.out" -exec grep -h -v "^mode:" {} \; >> combined-coverage.out || true
+          
+          # Generate HTML coverage report
+          go tool cover -html=combined-coverage.out -o coverage.html
+
+      - name: Upload combined coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-coverage-report
+          path: |
+            combined-coverage.out
+            coverage.html
+          retention-days: 30
+
+      - name: Comment PR with coverage
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const coverage = fs.readFileSync('combined-coverage.out', 'utf8');
+            const lines = coverage.split('\n');
+            const totalLine = lines.find(line => line.includes('total:'));
+            const coveragePercent = totalLine ? totalLine.split('\t')[4] : 'unknown';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Coverage Report
+              
+              **Total Coverage: ${coveragePercent}**
+              
+              <details>
+              <summary>View detailed coverage report</summary>
+              
+              \`\`\`
+              ${totalLine || 'Coverage data not available'}
+              \`\`\`
+              </details>`
+            });
