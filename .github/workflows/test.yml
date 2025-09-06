@@ -62,6 +62,7 @@ jobs:
           else
             echo "COVERAGE_FILE=coverage_${{ matrix.os }}.out" >> $GITHUB_ENV
           fi
+        shell: bash
 
       - name: Run tests
         run: go test -v -race -coverprofile=${{ env.COVERAGE_FILE }} ./...
