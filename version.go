@@ -8,7 +8,7 @@ import (
 
 // Version information - updated during releases
 var (
-	Version   = "v2.0.1"
+	Version   = "v2.0.2"
 	BuildDate = "unknown"
 	GitCommit = "unknown"
 	Author    = "Girino Vey"
