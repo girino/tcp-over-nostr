@@ -108,7 +108,7 @@ jobs:
       - name: Run Gosec Security Scanner
         uses: securego/gosec@master
         with:
-          args: '-fmt=sarif -out=gosec.sarif ./...'
+          args: '-fmt=sarif -out=gosec.sarif -no-fail ./...'
 
       - name: Check SARIF file
         run: |
