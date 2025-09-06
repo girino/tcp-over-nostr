@@ -73,7 +73,7 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 	activeSessions := make(map[string]chan bool)            // sessionID -> done channel
 	sessionEventChans := make(map[string]chan *nostr.Event) // sessionID -> event channel
 
-	for {
+	for { //nolint:gosimple // This is an event loop, not a range iteration
 		select {
 		case event := <-relayHandler.GetEventChannel():
 			// Check if this event is for us

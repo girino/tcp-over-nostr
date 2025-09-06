@@ -455,7 +455,6 @@ type NostrRelayHandler struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	eventChan chan *nostr.Event // Channel for received events
-	mu        sync.RWMutex      // Protects shared state
 }
 
 // NewNostrRelayHandler creates a new Nostr relay handler with multiple relays
