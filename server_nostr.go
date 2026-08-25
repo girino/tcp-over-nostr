@@ -73,7 +73,7 @@ func monitorNostrSessionEvents(relayHandler *NostrRelayHandler, keyMgr *KeyManag
 	activeSessions := make(map[string]chan bool)            // sessionID -> done channel
 	sessionEventChans := make(map[string]chan *nostr.Event) // sessionID -> event channel
 
-	for { //nolint:gosimple // This is an event loop, not a range iteration
+	for { //nolint:staticcheck // This is an event loop, not a range iteration
 		select {
 		case event := <-relayHandler.GetEventChannel():
 			// Check if this event is for us
@@ -164,7 +164,7 @@ func handleServerNostrSessionWithEvents(keyMgr *KeyManager, sessionID, clientPub
 		log.Printf("Server: Session %s - Failed to connect to target %s: %v", sessionID, targetAddr, err)
 		return
 	}
-	defer targetConn.Close()
+	defer func() { _ = targetConn.Close() }()
 
 	if verbose {
 		log.Printf("Server: Session %s - Connected to target %s", sessionID, targetAddr)

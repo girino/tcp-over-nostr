@@ -590,13 +590,13 @@ func (nrh *NostrRelayHandler) SubscribeToEvents(targetPubkey string) error {
 			select {
 			case nrh.eventChan <- relayEvent.Event:
 				if nrh.verbose {
-					log.Printf("Received event %s from relay %s", relayEvent.Event.ID, relayEvent.Relay)
+					log.Printf("Received event %s from relay %s", relayEvent.ID, relayEvent.Relay)
 				}
 			case <-nrh.ctx.Done():
 				return
 			default:
 				if nrh.verbose {
-					log.Printf("Event channel full, dropping event %s from relay %s", relayEvent.Event.ID, relayEvent.Relay)
+					log.Printf("Event channel full, dropping event %s from relay %s", relayEvent.ID, relayEvent.Relay)
 				}
 			}
 		}
@@ -626,13 +626,13 @@ func (nrh *NostrRelayHandler) SubscribeToGiftWrapEvents(targetPubkey string) err
 			select {
 			case nrh.eventChan <- relayEvent.Event:
 				if nrh.verbose {
-					log.Printf("Received encrypted gift wrap event %s from relay %s", relayEvent.Event.ID, relayEvent.Relay)
+					log.Printf("Received encrypted gift wrap event %s from relay %s", relayEvent.ID, relayEvent.Relay)
 				}
 			case <-nrh.ctx.Done():
 				return
 			default:
 				if nrh.verbose {
-					log.Printf("Event channel full, dropping gift wrap event %s from relay %s", relayEvent.Event.ID, relayEvent.Relay)
+					log.Printf("Event channel full, dropping gift wrap event %s from relay %s", relayEvent.ID, relayEvent.Relay)
 				}
 			}
 		}
