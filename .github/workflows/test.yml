@@ -10,9 +10,10 @@ on:
 permissions:
   contents: read
   security-events: write
+  pull-requests: write
 
 env:
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.25'
 
 jobs:
   test:
@@ -27,7 +28,7 @@ jobs:
             coverage-file: coverage_windows.out
           - os: macos-latest
             coverage-file: coverage_macos.out
-        go-version: ['1.24', '1.23']
+        go-version: ['1.25']
 
     steps:
       - name: Checkout code
@@ -143,7 +144,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        go-version: ['1.24']
+        go-version: ['1.25']
 
     steps:
       - name: Checkout code
@@ -272,6 +273,7 @@ jobs:
 
       - name: Comment PR with coverage
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |

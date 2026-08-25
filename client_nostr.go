@@ -77,7 +77,7 @@ func runClientNostr(clientPort int, relayURLs []string, serverPubkey, privateKey
 	if err != nil {
 		log.Fatalf("Failed to listen on %s: %v", listenAddr, err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	fmt.Printf("Client listening on %s\n", listenAddr)
 
@@ -107,7 +107,7 @@ func sanitizeSessionID(sessionID string) string {
 }
 
 func handleClientConnectionNostr(conn net.Conn, relayHandler *NostrRelayHandler, keyMgr *KeyManager, serverPubkeyHex, clientPubkey string, verbose bool) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	clientAddr := conn.RemoteAddr().String()
 	sessionID := fmt.Sprintf("session_%d_%s", time.Now().UnixNano(), clientAddr)
