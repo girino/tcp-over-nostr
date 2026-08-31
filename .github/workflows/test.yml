@@ -65,7 +65,7 @@ jobs:
         run: go test -v -coverprofile=${{ matrix.coverage-file }} -covermode=atomic ./...
 
       - name: Upload coverage reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os }}-go${{ matrix.go-version }}
           path: ${{ matrix.coverage-file }}
@@ -263,7 +263,7 @@ jobs:
           go tool cover -html=combined-coverage.out -o coverage.html
 
       - name: Upload combined coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: combined-coverage-report
           path: |
